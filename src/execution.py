@@ -4,7 +4,7 @@ Responsabilità:
 
 * connessione, caricamento mercati, leva/margine (derivati), testnet;
 * download delle sole candele **chiuse**;
-* calcolo della size eseguibile (delegato a :class:`risk.PositionSizer`) con
+* calcolo della size eseguibile (delegato a :class:`strategy.PositionSizer`) con
   i vincoli reali del mercato (precisione, minimi, ``contractSize``);
 * invio di ordini market di ingresso/uscita e ordini di protezione SL/TP
   reduce-only lato exchange;
@@ -13,14 +13,16 @@ Responsabilità:
 In modalità ``dry_run`` gli ordini sono simulati al prezzo ``last`` del ticker
 (nessuna chiamata privata), mentre i dati di mercato restano reali.
 
-Nota: gli ordini di creazione **non** vengono ritentati automaticamente in
-caso di errore di rete, per evitare ordini duplicati; lo sono solo le
-chiamate di sola lettura.
+Resilienza: tutte le chiamate di sola lettura passano per l'exponential
+backoff (:func:`with_backoff` / :func:`retry_async`). La creazione di ordini
+**non** viene ritentata automaticamente, per evitare ordini duplicati: un
+errore lì risale al loop principale, che lo registra senza terminare.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import math
 import uuid
@@ -31,15 +33,21 @@ from typing import Any
 import ccxt.async_support as ccxt_async
 import pandas as pd
 from ccxt.base.errors import (
+    AccountSuspended,
+    AuthenticationError,
+    BadRequest,
+    BadSymbol,
+    ExchangeError,
+    InsufficientFunds,
     InvalidOrder,
     NetworkError,
     NotSupported,
     OrderNotFound,
+    PermissionDenied,
 )
 
 from config import BotConfig
-from risk import MarketLimits, PositionSizer, SizingResult
-from strategy import Side
+from strategy import MarketLimits, PositionSizer, Side, SizingResult
 
 logger = logging.getLogger(__name__)
 
@@ -63,32 +71,101 @@ class Fill:
     amount: float
 
 
+#: Errori ccxt permanenti: ritentarli è inutile (credenziali, simbolo,
+#: fondi, parametri dell'ordine) e ne ritarderebbe solo la segnalazione.
+PERMANENT_ERRORS: tuple[type[Exception], ...] = (
+    AuthenticationError,
+    PermissionDenied,
+    AccountSuspended,
+    BadSymbol,
+    BadRequest,
+    InsufficientFunds,
+    InvalidOrder,
+    NotSupported,
+)
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Indica se un errore ccxt merita un nuovo tentativo.
+
+    ``NetworkError`` include ``RateLimitExceeded``, ``DDoSProtection``,
+    ``RequestTimeout`` ed ``ExchangeNotAvailable``.
+
+    Args:
+        exc: Eccezione sollevata.
+
+    Returns:
+        ``True`` per errori di rete/rate limit ed ``ExchangeError`` transitori.
+    """
+    if isinstance(exc, PERMANENT_ERRORS):
+        return False
+    return isinstance(exc, (NetworkError, ExchangeError))
+
+
 async def retry_async[T](
-    func: Callable[[], Awaitable[T]], attempts: int = 3, base_delay: float = 2.0
+    func: Callable[[], Awaitable[T]], attempts: int = 4, base_delay: float = 2.0
 ) -> T:
-    """Esegue una coroutine ritentando sugli errori di rete (backoff esponenziale).
+    """Esegue una coroutine con exponential backoff sugli errori transitori.
+
+    Attese: ``base_delay · 2ⁿ`` (2s, 4s, 8s con i valori di default).
 
     Args:
         func: Factory senza argomenti che restituisce la coroutine da eseguire.
         attempts: Numero massimo di tentativi.
-        base_delay: Attesa iniziale in secondi (raddoppia a ogni tentativo).
+        base_delay: Attesa iniziale in secondi.
 
     Returns:
         Il risultato della coroutine.
 
     Raises:
-        NetworkError: Se tutti i tentativi falliscono.
+        ccxt.BaseError: L'ultimo errore transitorio, o subito un errore permanente.
     """
     for attempt in range(1, attempts + 1):
         try:
             return await func()
-        except NetworkError as exc:
-            if attempt == attempts:
+        except (NetworkError, ExchangeError) as exc:
+            if attempt == attempts or not is_transient(exc):
                 raise
             delay = base_delay * 2 ** (attempt - 1)
-            logger.warning("Errore di rete (%s), nuovo tentativo tra %.0fs", exc, delay)
+            logger.warning(
+                "%s (%s), tentativo %d/%d tra %.0fs",
+                type(exc).__name__, exc, attempt + 1, attempts, delay,
+            )
             await asyncio.sleep(delay)
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+def with_backoff[**P, T](
+    attempts: int = 4, base_delay: float = 2.0
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
+    """Decoratore di exponential backoff per metodi asincroni di **sola lettura**.
+
+    Non va applicato alla creazione di ordini: un timeout può arrivare dopo
+    che l'exchange ha accettato l'ordine e il nuovo tentativo lo duplicherebbe.
+
+    Args:
+        attempts: Numero massimo di tentativi.
+        base_delay: Attesa iniziale in secondi.
+
+    Returns:
+        Il decoratore.
+
+    Example:
+        >>> @with_backoff(attempts=3)
+        ... async def fetch() -> int:
+        ...     return 42
+        >>> asyncio.run(fetch())
+        42
+    """
+
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
+        @functools.wraps(func)
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+            return await retry_async(lambda: func(*args, **kwargs), attempts, base_delay)
+
+        return wrapper
+
+    return decorator
 
 
 class ExecutionEngine:
@@ -204,6 +281,7 @@ class ExecutionEngine:
         """Chiude le sessioni HTTP di ccxt."""
         await self.exchange.close()
 
+    @with_backoff()
     async def clock_drift_ms(self) -> float | None:
         """Differenza tra orologio locale ed exchange (ms), se misurabile.
 
@@ -214,7 +292,7 @@ class ExecutionEngine:
         if not self.exchange.has.get("fetchTime"):
             return None
         local_before = self.exchange.milliseconds()
-        server = await retry_async(lambda: self.exchange.fetch_time())
+        server = await self.exchange.fetch_time()
         local_after = self.exchange.milliseconds()
         if server is None:
             return None
@@ -223,6 +301,7 @@ class ExecutionEngine:
     # ------------------------------------------------------------------ #
     # Dati di mercato
     # ------------------------------------------------------------------ #
+    @with_backoff()
     async def fetch_closed_ohlcv(self, now_ms: int) -> pd.DataFrame:
         """Scarica le ultime candele chiuse.
 
@@ -236,9 +315,7 @@ class ExecutionEngine:
         tf = self.config.strategy.timeframe
         tf_ms = self.config.strategy.timeframe_seconds * 1000
         limit = self.config.strategy.ohlcv_limit + 1
-        raw = await retry_async(
-            lambda: self.exchange.fetch_ohlcv(self.symbol, timeframe=tf, limit=limit)
-        )
+        raw = await self.exchange.fetch_ohlcv(self.symbol, timeframe=tf, limit=limit)
         df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df = df[df["timestamp"] + tf_ms <= now_ms]
         df = df.drop_duplicates("timestamp").sort_values("timestamp")
@@ -246,9 +323,10 @@ class ExecutionEngine:
         df.index.name = "datetime"
         return df.astype(float)
 
+    @with_backoff()
     async def fetch_last_price(self) -> float:
         """Ultimo prezzo scambiato (``last``, con fallback su ``close``/bid/ask)."""
-        ticker = await retry_async(lambda: self.exchange.fetch_ticker(self.symbol))
+        ticker = await self.exchange.fetch_ticker(self.symbol)
         for key in ("last", "close"):
             value = ticker.get(key)
             if value:
@@ -258,6 +336,7 @@ class ExecutionEngine:
             return (float(bid) + float(ask)) / 2
         raise RuntimeError(f"Ticker senza prezzo valido per {self.symbol}")
 
+    @with_backoff()
     async def fetch_equity(self) -> float:
         """Capitale del conto in valuta di quotazione (``total``).
 
@@ -265,7 +344,7 @@ class ExecutionEngine:
             Il saldo totale della valuta di quotazione.
         """
         quote = self.config.exchange.quote_currency
-        balance = await retry_async(lambda: self.exchange.fetch_balance())
+        balance = await self.exchange.fetch_balance()
         return float((balance.get("total") or {}).get(quote) or 0.0)
 
     # ------------------------------------------------------------------ #
@@ -315,10 +394,10 @@ class ExecutionEngine:
             price: Prezzo di riferimento.
 
         Returns:
-            Il :class:`risk.SizingResult` eseguibile.
+            Il :class:`strategy.SizingResult` eseguibile.
 
         Raises:
-            risk.SizingError: Se la size viola i minimi dell'exchange.
+            strategy.SizingError: Se la size viola i minimi dell'exchange.
         """
         return self.sizer.size(
             balance=balance,
@@ -491,6 +570,7 @@ class ExecutionEngine:
     # ------------------------------------------------------------------ #
     # Riconciliazione
     # ------------------------------------------------------------------ #
+    @with_backoff()
     async def fetch_position_amount(self) -> float:
         """Quantità aperta sul derivato, in asset base (valore assoluto).
 
@@ -502,7 +582,7 @@ class ExecutionEngine:
         """
         if not self.is_contract:
             raise RuntimeError("fetch_position_amount è definito solo per i derivati")
-        positions = await retry_async(lambda: self.exchange.fetch_positions([self.symbol]))
+        positions = await self.exchange.fetch_positions([self.symbol])
         contract_size = self.market_limits().contract_size
         total = 0.0
         for pos in positions:
@@ -510,10 +590,11 @@ class ExecutionEngine:
                 total += abs(float(pos.get("contracts") or 0.0)) * contract_size
         return total
 
+    @with_backoff()
     async def _free_base_balance(self) -> float:
         """Saldo libero dell'asset base (spot)."""
         base = self.config.exchange.base_currency
-        balance = await retry_async(lambda: self.exchange.fetch_balance())
+        balance = await self.exchange.fetch_balance()
         return float((balance.get("free") or {}).get(base) or 0.0)
 
     async def fetch_exit_fill(self, side: Side, since_ms: int) -> Fill | None:

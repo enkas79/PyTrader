@@ -26,7 +26,11 @@ except ImportError:  # pragma: no cover
     load_dotenv = None  # type: ignore[assignment]
 
 
-BASE_DIR: Final[Path] = Path(__file__).resolve().parent
+#: Versione del progetto (Semantic Versioning 2.0.0).
+__version__: Final[str] = "0.2.0"
+
+#: Radice del repository (i sorgenti sono in ``src/``).
+BASE_DIR: Final[Path] = Path(__file__).resolve().parent.parent
 
 #: Durata in secondi dei timeframe supportati dal loop di sincronizzazione.
 TIMEFRAME_SECONDS: Final[dict[str, int]] = {

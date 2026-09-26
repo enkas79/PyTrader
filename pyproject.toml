@@ -1,6 +1,6 @@
 [project]
 name = "pytrader"
-version = "0.1.0"
+version = "0.2.0"
 description = "Trading bot Donchian breakout + VWAP daily bands (15m) per Raspberry Pi"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
@@ -16,8 +16,8 @@ dependencies = [
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests", "main.py", "db_manager.py"]
+pythonpath = ["src", "."]
+testpaths = ["tests", "src"]
 asyncio_mode = "auto"
 addopts = "--doctest-modules"
 

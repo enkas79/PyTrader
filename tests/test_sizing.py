@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from risk import MarketLimits, PositionSizer, SizingError
+from strategy import MarketLimits, PositionSizer, SizingError
 
 
 def truncate(step: float):

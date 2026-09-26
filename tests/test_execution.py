@@ -10,8 +10,7 @@ import pytest
 
 from config import BotConfig
 from execution import ExecutionEngine
-from risk import SizingError
-from strategy import Side
+from strategy import Side, SizingError
 
 MARKET: dict[str, Any] = {
     "id": "BTCUSDT", "symbol": "BTC/USDT:USDT", "base": "BTC", "quote": "USDT",
@@ -99,3 +98,41 @@ async def test_live_protection_orders_are_reduce_only(bot_config: BotConfig) -> 
     assert tp[1] == "buy" and tp[3] == {"takeProfitPrice": 58_500.1, "reduceOnly": True}
     assert (sl_id, tp_id) == ("2", "3")
     await eng.close()
+
+
+async def test_backoff_retries_transient_errors(monkeypatch) -> None:
+    from ccxt.base.errors import RateLimitExceeded
+
+    from execution import with_backoff
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("execution.asyncio.sleep", no_sleep)
+    calls = {"n": 0}
+
+    @with_backoff(attempts=4)
+    async def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RateLimitExceeded("429")
+        return "ok"
+
+    assert await flaky() == "ok" and calls["n"] == 3
+
+
+async def test_backoff_does_not_retry_permanent_errors(monkeypatch) -> None:
+    from ccxt.base.errors import AuthenticationError
+
+    from execution import with_backoff
+
+    calls = {"n": 0}
+
+    @with_backoff(attempts=4)
+    async def bad_key() -> None:
+        calls["n"] += 1
+        raise AuthenticationError("invalid api key")
+
+    with pytest.raises(AuthenticationError):
+        await bad_key()
+    assert calls["n"] == 1

@@ -1,4 +1,4 @@
-# PyTrader v0.1.0
+# PyTrader v0.2.0
 
 Trading bot asincrono per criptovalute (default **BTC/USDT perpetual**) pensato
 per girare 24/7 su Raspberry Pi. Strategia breakout **Donchian(55)** su 15m con
@@ -7,16 +7,21 @@ position sizing a **rischio fisso dell'1%**.
 
 ## Architettura
 
-| Modulo | Responsabilità |
+| Modulo (`src/`) | Responsabilità |
 |---|---|
-| `config.py` | Parametri e credenziali da `.env`/ambiente, validazione di coerenza |
+| `config.py` | Parametri e credenziali da `.env`/ambiente, validazione, `__version__` (SemVer) |
 | `indicators.py` | `IndicatorEngine`: ATR, Donchian, VWAP daily + bande σ (`pandas_ta`) |
-| `strategy.py` | `Strategy`: segnali vettorizzati long/short e livelli SL/TP |
-| `risk.py` | `PositionSizer`: `(balance × 1%) / (2 × ATR)` + vincoli exchange |
-| `execution.py` | `ExecutionEngine`: `ccxt.async_support`, ordini, riconciliazione |
+| `strategy.py` | `Strategy` (segnali e SL/TP) e `PositionSizer` (`(balance × 1%) / (2 × ATR)` + vincoli exchange) |
+| `execution.py` | `ExecutionEngine`: `ccxt.async_support`, ordini, riconciliazione, `@with_backoff` |
 | `db_manager.py` | `DatabaseManager`: SQLite (WAL) per trade aperto e stato |
 | `main.py` | `TradingBot`: loop sincronizzato a :00/:15/:30/:45 UTC |
-| `version.py` | `__version__` (SemVer) |
+| `backtest.py` | `Backtester`: simulazione con commissioni, slippage, gap e vincoli exchange |
+
+Le chiamate di sola lettura verso l'exchange usano exponential backoff
+(2s, 4s, 8s) su `NetworkError` (incluso `RateLimitExceeded`) ed `ExchangeError`
+transitori; gli errori permanenti (credenziali, fondi, ordine non valido) non
+vengono ritentati. La creazione di ordini non è mai ritentata automaticamente:
+un timeout dopo l'accettazione dell'ordine produrrebbe un duplicato.
 
 Flusso per candela: risveglio a `chiusura + 5s` → download candele **chiuse**
 → riconciliazione del trade aperto → segnale → size → ordine market → SL/TP
@@ -52,7 +57,8 @@ verifica `min amount` e `min cost`. Se la size è sotto i minimi il trade viene
 
 ## Installazione su Raspberry Pi
 
-`pandas_ta` 0.4.x (l'unica versione oggi su PyPI) richiede **Python ≥ 3.12**:
+`pandas_ta` 0.4.x (l'unica versione oggi su PyPI) richiede **Python ≥ 3.12**
+(non 3.11 come indicato in `claude_md.md`):
 Raspberry Pi OS *Trixie* (Python 3.13) va bene; su *Bookworm* (3.11) installa
 un interprete recente con [`uv`](https://docs.astral.sh/uv/). Serve un sistema
 a **64 bit** (wheel `numba`/`llvmlite` per aarch64).
@@ -60,9 +66,9 @@ a **64 bit** (wheel `numba`/`llvmlite` per aarch64).
 ```bash
 git clone https://github.com/enkas79/PyTrader.git && cd PyTrader
 python3 -m venv .venv && . .venv/bin/activate      # oppure: uv venv -p 3.12
-pip install -r requirements.txt
+pip install -r requirements.txt                    # versioni bloccate
 cp .env.example .env && nano .env                  # DRY_RUN=true per iniziare
-python main.py
+python src/main.py
 ```
 
 Servizio permanente con riavvio automatico:
@@ -101,6 +107,47 @@ sono gestite via software (che però **non** protegge durante un blackout).
 - Se SL/TP non possono essere piazzati dopo l'ingresso, la posizione viene
   chiusa immediatamente (`protection_failed`).
 
+## Backtest
+
+Riusa `Strategy` e `PositionSizer` del bot live, quindi testa il codice che
+andrà in produzione.
+
+```bash
+# scarica lo storico (API pubbliche, nessuna chiave) e lo salva in CSV
+python src/backtest.py --fetch --since 2023-01-01 --save data/btcusdt_15m.csv
+# rilancia sul CSV variando i costi
+python src/backtest.py --csv data/btcusdt_15m.csv --fee 0.0005 --slippage-bps 2 \
+    --trades-out data/trades.csv
+```
+
+Modello di esecuzione (conservativo):
+
+- ingresso all'**apertura della candela successiva** al segnale, con slippage;
+- SL e TP toccati nella stessa candela → si assume **prima lo SL**;
+- gap in apertura oltre lo SL → uscita all'apertura (perdita > 1R);
+- commissione taker su ingresso e uscita; tetto al nozionale e minimi exchange
+  come nel bot live; posizione residua chiusa a fine storico.
+
+Non modellati: funding dei perpetual, liquidità del book, latenza reale.
+
+Output: trade, win rate osservato vs **win rate di pareggio**, expectancy in R,
+profit factor, max drawdown, Sharpe, peso delle commissioni sul PnL lordo,
+confronto con il buy & hold e scomposizione **per anno** (stabilità tra
+regimi di mercato).
+
+Come leggerlo senza ingannarsi:
+
+- ogni parametro modificato dopo aver visto i risultati è overfitting: tieni
+  un periodo *out-of-sample* che guardi una sola volta (`--until` / `--since`);
+- l'expectancy va valutata insieme al numero di trade: con meno di ~100
+  trade l'errore statistico è dello stesso ordine del risultato;
+- un anno molto positivo e gli altri negativi indicano dipendenza dal regime,
+  non un vantaggio strutturale.
+
+Controllo di coerenza: su un random walk sintetico il backtest restituisce
+expectancy ≈ −0,1R per trade, cioè circa il costo di commissioni e slippage,
+come atteso in assenza di vantaggio.
+
 ## Test
 
 ```bash
@@ -109,13 +156,15 @@ pytest
 ```
 
 I test verificano gli indicatori contro implementazioni di riferimento (VWAP e σ
-calcolati a forza bruta), le regole di ingresso, il sizing, la persistenza e il
-ciclo completo in paper trading con un exchange simulato (nessuna rete).
+calcolati a forza bruta), le regole di ingresso, il sizing, la persistenza, il
+backoff, il ciclo completo in paper trading con un exchange simulato (nessuna
+rete) e il backtest (costi esatti, gap, SL/TP nella stessa candela, assenza di
+look-ahead).
 
 ## Avvertenze (leggere prima di andare live)
 
-- **Nessun backtest incluso.** La strategia non è validata: fai prima paper
-  trading e un backtest su dati storici con commissioni e slippage.
+- **La strategia non è validata.** Esegui il backtest su più anni e un periodo
+  di paper trading prima di andare live.
 - **Commissioni.** Con uno stop di 2·ATR su 15m (tipicamente 0,3–0,6% del
   prezzo su BTC) il nozionale è 1,7–3,3× il saldo. Con taker 0,05% per lato il
   costo round-trip vale circa il 17–33% di R: l'R:R netto scende da 2,5 a

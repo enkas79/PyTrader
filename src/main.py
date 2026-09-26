@@ -9,7 +9,7 @@ misurato lo scarto rispetto al server dell'exchange e segnalato nel log.
 
 Uso::
 
-    python main.py            # legge la configurazione da .env / ambiente
+    python src/main.py        # legge la configurazione da .env / ambiente
 """
 
 from __future__ import annotations
@@ -27,12 +27,10 @@ from pathlib import Path
 
 from ccxt.base.errors import BaseError as CcxtError
 
-from config import BotConfig, ConfigError, load_config
+from config import BotConfig, ConfigError, __version__, load_config
 from db_manager import DatabaseManager, Trade
 from execution import ExecutionEngine, Fill
-from risk import SizingError
-from strategy import Side, Signal, Strategy
-from version import __version__
+from strategy import Side, Signal, SizingError, Strategy
 
 logger = logging.getLogger("pytrader")
 
