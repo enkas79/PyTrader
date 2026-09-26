@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover
 
 
 #: Versione del progetto (Semantic Versioning 2.0.0).
-__version__: Final[str] = "0.2.0"
+__version__: Final[str] = "0.3.0"
 
 #: Radice del repository (i sorgenti sono in ``src/``).
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent.parent

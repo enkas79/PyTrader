@@ -1,0 +1,131 @@
+// This Pine Script® code is subject to the terms of the MIT License
+// PyTrader v0.3.0 — replica per lo Strategy Tester di TradingView.
+//
+// Stesse regole di src/strategy.py e src/indicators.py:
+//   Long : close > DonchianUpper55[1]  e  close < VWAP_D + 2σ
+//   Short: close < DonchianLower55[1]  e  close > VWAP_D − 2σ
+//   SL = entry ∓ 2·ATR14, TP = entry ± 5·ATR14 (ATR della candela di segnale,
+//   livelli ancorati al prezzo di esecuzione reale)
+//   Size = (capitale · 1%) / (2·ATR), con tetto al nozionale, troncamento al
+//   passo di quantità e scarto dei trade sotto i minimi dell'exchange.
+//
+// Uso: grafico BINANCE:BTCUSDT.P a 15 minuti. Imposta lo slippage in
+// "Proprietà" (tick; 2 bps a 60 000 USDT ≈ 120 tick da 0,1).
+
+//@version=6
+strategy("PyTrader Donchian + VWAP (15m)", shorttitle = "PyTrader", overlay = true,
+     initial_capital = 10000, currency = currency.USDT,
+     default_qty_type = strategy.fixed, pyramiding = 0,
+     commission_type = strategy.commission.percent, commission_value = 0.05,
+     slippage = 0, margin_long = 20, margin_short = 20,
+     process_orders_on_close = false, calc_on_every_tick = false)
+
+// ─── Input ──────────────────────────────────────────────────────────────────
+grpInd  = "Indicatori"
+atrLen  = input.int(14, "ATR periodi", minval = 1, group = grpInd)
+dcLen   = input.int(55, "Donchian periodi", minval = 1, group = grpInd)
+bandK   = input.float(2.0, "Bande VWAP (σ)", minval = 0.1, step = 0.1, group = grpInd)
+
+grpRisk = "Rischio"
+slMult  = input.float(2.0, "Stop loss (× ATR)", minval = 0.1, step = 0.1, group = grpRisk)
+tpMult  = input.float(5.0, "Take profit (× ATR)", minval = 0.1, step = 0.1, group = grpRisk)
+riskPct = input.float(1.0, "Rischio per trade (%)", minval = 0.01, maxval = 5.0, step = 0.1, group = grpRisk)
+maxNotl = input.float(3.0, "Tetto nozionale (× capitale)", minval = 0.1, step = 0.1, group = grpRisk)
+allowSh = input.bool(true, "Abilita short", group = grpRisk)
+
+grpMkt  = "Vincoli exchange"
+qtyStep = input.float(0.001, "Passo quantità", minval = 0.0, group = grpMkt)
+minQty  = input.float(0.001, "Quantità minima", minval = 0.0, group = grpMkt)
+minNotl = input.float(100.0, "Nozionale minimo (USDT)", minval = 0.0, group = grpMkt)
+
+grpWin  = "Periodo di test (in-sample / out-of-sample)"
+tStart  = input.time(timestamp("UTC", 2022, 1, 1, 0, 0), "Inizio", group = grpWin)
+tEnd    = input.time(timestamp("UTC", 2099, 1, 1, 0, 0), "Fine", group = grpWin)
+
+// ─── Indicatori ─────────────────────────────────────────────────────────────
+atr = ta.atr(atrLen)
+dcu = ta.highest(high, dcLen)
+dcl = ta.lowest(low, dcLen)
+dcm = (dcu + dcl) / 2
+
+// VWAP ancorato a 00:00 UTC con σ ponderata per volume:
+//   σ² = Σv·tp² / Σv − VWAP²   (centrata sul primo tp della sessione per
+//   stabilità numerica, identica a IndicatorEngine.session_vwap_std)
+dayIdx = math.floor(time / 86400000)
+newDay = bar_index == 0 or dayIdx != dayIdx[1]
+tp     = hlc3
+var float ref   = na
+var float sumV  = 0.0
+var float sumVX = 0.0
+var float sumVX2 = 0.0
+if newDay
+    ref    := tp
+    sumV   := 0.0
+    sumVX  := 0.0
+    sumVX2 := 0.0
+x = tp - ref
+sumV   += volume
+sumVX  += volume * x
+sumVX2 += volume * x * x
+meanX  = sumV > 0 ? sumVX / sumV : na
+vwapMid = ref + meanX
+sigma  = sumV > 0 ? math.sqrt(math.max(sumVX2 / sumV - meanX * meanX, 0.0)) : na
+vwapUp = vwapMid + bandK * sigma
+vwapLo = vwapMid - bandK * sigma
+
+// ─── Segnali (candela chiusa; esecuzione all'apertura successiva) ───────────
+longSig  = close > dcu[1] and close < vwapUp
+shortSig = allowSh and close < dcl[1] and close > vwapLo
+
+// ─── Position sizing ────────────────────────────────────────────────────────
+balance  = strategy.initial_capital + strategy.netprofit   // saldo realizzato
+stopDist = slMult * atr
+qtyRaw   = balance * riskPct / 100 / stopDist
+qtyCap   = balance * maxNotl / close
+qtyBase  = math.min(qtyRaw, qtyCap)
+qty      = qtyStep > 0 ? math.floor(qtyBase / qtyStep + 1e-9) * qtyStep : qtyBase
+sizeOk   = not na(qty) and qty > 0 and qty >= minQty and qty * close >= minNotl
+
+inWindow = time >= tStart and time <= tEnd
+flat     = strategy.position_size == 0
+canTrade = flat and inWindow and sizeOk and atr > 0
+
+// ATR della candela di segnale, per disegnare i livelli del trade aperto.
+var float signalAtr = na
+
+// loss/profit sono in tick dal prezzo di esecuzione reale: SL e TP restano a
+// 2·ATR e 5·ATR dal fill (slippage incluso), come nel bot live.
+if canTrade and longSig
+    strategy.entry("Long", strategy.long, qty = qty)
+    strategy.exit("Long SL/TP", "Long", loss = stopDist / syminfo.mintick, profit = tpMult * atr / syminfo.mintick)
+    signalAtr := atr
+else if canTrade and shortSig
+    strategy.entry("Short", strategy.short, qty = qty)
+    strategy.exit("Short SL/TP", "Short", loss = stopDist / syminfo.mintick, profit = tpMult * atr / syminfo.mintick)
+    signalAtr := atr
+
+// ─── Grafica ────────────────────────────────────────────────────────────────
+plot(dcu, "Donchian Upper", color.new(color.teal, 0))
+plot(dcm, "Donchian Middle", color.new(color.teal, 60))
+plot(dcl, "Donchian Lower", color.new(color.teal, 0))
+pUp = plot(vwapUp, "VWAP +σ", color.new(color.orange, 40), style = plot.style_linebr)
+plot(vwapMid, "VWAP", color.new(color.orange, 0), 2, style = plot.style_linebr)
+pLo = plot(vwapLo, "VWAP −σ", color.new(color.orange, 40), style = plot.style_linebr)
+fill(pUp, pLo, color.new(color.orange, 92), "Bande VWAP")
+
+isLong  = strategy.position_size > 0
+isShort = strategy.position_size < 0
+entryPx = strategy.position_avg_price
+slLevel = isLong ? entryPx - slMult * signalAtr : isShort ? entryPx + slMult * signalAtr : na
+tpLevel = isLong ? entryPx + tpMult * signalAtr : isShort ? entryPx - tpMult * signalAtr : na
+plot(slLevel, "Stop loss", color.red, 2, style = plot.style_linebr)
+plot(tpLevel, "Take profit", color.green, 2, style = plot.style_linebr)
+
+plotshape(canTrade and longSig, "Segnale long", shape.triangleup, location.belowbar, color.green, size = size.tiny)
+plotshape(canTrade and shortSig and not longSig, "Segnale short", shape.triangledown, location.abovebar, color.red, size = size.tiny)
+
+// Avviso se il timeframe non è 15m (la strategia è calibrata su 15 minuti).
+var table warn = table.new(position.top_right, 1, 1)
+if barstate.islast and timeframe.period != "15"
+    table.cell(warn, 0, 0, "PyTrader è calibrato su 15m: timeframe attuale " + timeframe.period,
+         bgcolor = color.new(color.red, 20), text_color = color.white)

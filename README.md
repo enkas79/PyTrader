@@ -1,4 +1,4 @@
-# PyTrader v0.2.0
+# PyTrader v0.3.0
 
 Trading bot asincrono per criptovalute (default **BTC/USDT perpetual**) pensato
 per girare 24/7 su Raspberry Pi. Strategia breakout **Donchian(55)** su 15m con
@@ -147,6 +147,39 @@ Come leggerlo senza ingannarsi:
 Controllo di coerenza: su un random walk sintetico il backtest restituisce
 expectancy ≈ −0,1R per trade, cioè circa il costo di commissioni e slippage,
 come atteso in assenza di vantaggio.
+
+## TradingView (Pine Script v6)
+
+`tradingview/pytrader_strategy.pine` replica le stesse regole per lo Strategy
+Tester di TradingView: utile come verifica visiva e come controllo incrociato
+del backtest Python.
+
+1. Apri il grafico **BINANCE:BTCUSDT.P** a **15 minuti**.
+2. Pine Editor → incolla il file → *Aggiungi al grafico*.
+3. *Proprietà*: imposta lo slippage in tick (≈120 tick = 2 bps a 60 000 USDT)
+   e, se disponibile, attiva il *Bar Magnifier*.
+4. Usa *Inizio*/*Fine* negli input per separare in-sample e out-of-sample.
+
+Parità con il bot: stessi indicatori (VWAP e σ calcolati con la stessa formula,
+ancoraggio 00:00 UTC), stesso sizing (1%, tetto al nozionale, passo 0,001,
+minimo 100 USDT), ingresso all'apertura successiva, SL/TP in tick dal prezzo
+di esecuzione reale, commissione 0,05% per lato, margine 20% (leva 5×).
+
+Differenze note rispetto a `src/backtest.py` (i risultati non coincideranno
+al centesimo):
+
+- **ordine intrabar**: se SL e TP cadono nella stessa candela, il backtest
+  Python assume sempre prima lo SL; il broker emulator di TradingView deduce il
+  percorso da O/H/L/C ed è quindi più ottimista (il Bar Magnifier riduce il
+  problema);
+- slippage fisso in tick invece che in bps;
+- seme iniziale dell'ATR (SMA in Pine, RMA in `pandas_ta`): differenze solo
+  nelle prime candele;
+- i volumi del feed TradingView possono differire da quelli via ccxt, e con
+  essi VWAP e bande.
+
+Se TradingView e il backtest Python divergono in modo sostanziale sullo
+stesso periodo, la causa va trovata prima di fidarsi di uno dei due.
 
 ## Test
 

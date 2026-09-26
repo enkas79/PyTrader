@@ -3,6 +3,18 @@
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/),
 versionamento [SemVer](https://semver.org/lang/it/).
 
+## [0.3.0] - 2026-09-26
+
+### Aggiunto
+- `tradingview/pytrader_strategy.pine`: strategia Pine Script v6 per lo
+  Strategy Tester di TradingView con le stesse regole, lo stesso VWAP ± σ
+  ancorato a 00:00 UTC e lo stesso position sizing del bot.
+
+### Modificato
+- `CLAUDE.md` (ex `claude_md.md`) allineato al codice: Python ≥ 3.12, layout
+  `src/`, backoff solo sulle chiamate di lettura, ordini mai ritentati,
+  posizione della versione semantica.
+
 ## [0.2.0] - 2026-09-26
 
 ### Aggiunto

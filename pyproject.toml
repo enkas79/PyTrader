@@ -1,6 +1,6 @@
 [project]
 name = "pytrader"
-version = "0.2.0"
+version = "0.3.0"
 description = "Trading bot Donchian breakout + VWAP daily bands (15m) per Raspberry Pi"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
