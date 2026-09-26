@@ -1,0 +1,29 @@
+[project]
+name = "pytrader"
+version = "0.1.0"
+description = "Trading bot Donchian breakout + VWAP daily bands (15m) per Raspberry Pi"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+    "ccxt>=4.3,<5",
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "pandas_ta>=0.4.67b0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests", "main.py", "db_manager.py"]
+asyncio_mode = "auto"
+addopts = "--doctest-modules"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

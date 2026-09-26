@@ -1,0 +1,6 @@
+# Python >= 3.12 richiesto da pandas_ta 0.4.x
+ccxt>=4.3,<5
+pandas>=2.2
+numpy>=2.0
+pandas_ta>=0.4.67b0
+python-dotenv>=1.0
