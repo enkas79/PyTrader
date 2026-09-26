@@ -39,8 +39,8 @@ minQty  = input.float(0.001, "Quantità minima", minval = 0.0, group = grpMkt)
 minNotl = input.float(100.0, "Nozionale minimo (USDT)", minval = 0.0, group = grpMkt)
 
 grpWin  = "Periodo di test (in-sample / out-of-sample)"
-tStart  = input.time(timestamp("UTC", 2022, 1, 1, 0, 0), "Inizio", group = grpWin)
-tEnd    = input.time(timestamp("UTC", 2099, 1, 1, 0, 0), "Fine", group = grpWin)
+tStart  = input.time(timestamp("01 Jan 2022 00:00 +0000"), "Inizio", group = grpWin)
+tEnd    = input.time(timestamp("01 Jan 2099 00:00 +0000"), "Fine", group = grpWin)
 
 // ─── Indicatori ─────────────────────────────────────────────────────────────
 atr = ta.atr(atrLen)
