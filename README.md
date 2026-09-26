@@ -58,7 +58,7 @@ verifica `min amount` e `min cost`. Se la size è sotto i minimi il trade viene
 ## Installazione su Raspberry Pi
 
 `pandas_ta` 0.4.x (l'unica versione oggi su PyPI) richiede **Python ≥ 3.12**
-(non 3.11 come indicato in `claude_md.md`):
+(non 3.11 come indicato in `CLAUDE.md`):
 Raspberry Pi OS *Trixie* (Python 3.13) va bene; su *Bookworm* (3.11) installa
 un interprete recente con [`uv`](https://docs.astral.sh/uv/). Serve un sistema
 a **64 bit** (wheel `numba`/`llvmlite` per aarch64).
