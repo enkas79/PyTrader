@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 from pytrader.backtest import MoneyParams
 from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
 from pytrader.gui.theme import current_palette
+from pytrader.gui.widgets import ColumnChooser
 from pytrader.gui.workers import Worker
 from pytrader.live import (
     LiveScanner,
@@ -173,6 +174,7 @@ class LivePanel(QWidget):
         self.signal_table = self._make_table(SIGNAL_COLUMNS)
         self.signal_table.cellDoubleClicked.connect(self._on_signal_double_clicked)
         self.signal_table.setToolTip("Doppio clic per aprire il mercato nel grafico")
+        self.signal_columns = ColumnChooser(self.signal_table, SIGNAL_COLUMNS)
         self.clear_button = QPushButton("Svuota storico")
         self.clear_button.setObjectName("secondaryButton")
         self.clear_button.clicked.connect(self._clear_history)
@@ -198,11 +200,13 @@ class LivePanel(QWidget):
         right_layout.addLayout(header)
         right_layout.addWidget(self.signal_table)
 
-        split = QSplitter(Qt.Orientation.Horizontal)
+        # Watchlist sopra, segnali sotto: la tabella dei segnali (11 colonne) usa tutta la larghezza
+        split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(left)
         split.addWidget(right)
         split.setStretchFactor(0, 2)
         split.setStretchFactor(1, 3)
+        self.splitter = split
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)

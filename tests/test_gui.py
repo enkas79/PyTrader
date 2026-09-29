@@ -218,8 +218,8 @@ def test_walk_forward_dialogo_applica_parametri(
     assert dialog.apply_button.isEnabled()
     recommended = dialog._result.recommended  # type: ignore[union-attr]
     dialog._apply()
-    assert window.prox_spin.value() == pytest.approx(recommended.proximity_atr)
-    assert window.rr_spin.value() == pytest.approx(1.5)
+    assert window.params_panel.prox_spin.value() == pytest.approx(recommended.proximity_atr)
+    assert window.params_panel.rr_spin.value() == pytest.approx(1.5)
     QThreadPool.globalInstance().waitForDone(5000)
     window.close()
 
@@ -263,3 +263,66 @@ def test_intervallo_controllo_per_mercato(qapp: QApplication) -> None:
     live._refresh_watchlist()  # aggiornamento testi: il selettore resta lo stesso
     assert live.watch_table.cellWidget(0, 1) is combo
     window.quit_app()
+
+
+def test_layout_pannello_parametri_e_barra(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow
+
+    window = MainWindow()
+    window.show()
+    assert window.params_dock.isHidden()  # chiuso di default
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == [
+        "Setup", "Dati", "Live",
+    ]  # fmt: skip
+    toolbar = [a.text() for a in window.toolbar.actions() if not a.isSeparator()]
+    assert toolbar == ["Carica dati", "Analizza", "Parametri", "Walk-forward…"]
+    window.show_params()
+    assert window.params_dock.isVisible() and window.params_act.isChecked()
+
+    frame, report = validate_ohlcv(random_walk)
+    window._data = LoadedData(DataRequest(kind=SourceKind.CSV), frame, report)
+    window._analyzed = (window._signal_params(), window.params_panel.fee_rate())
+    window._on_analyzed(run_analysis(frame))
+    button = window.toolbar.widgetForAction(window.analyze_act)
+    assert not window.params_stale
+    assert "R:R 2" in window.params_summary.text()
+    window.params_panel.rr_spin.setValue(3.0)
+    assert window.params_stale  # analisi mostrata non più aggiornata
+    assert button.property("attention") is True
+    assert "R:R 3" in window.params_summary.text()
+    window.params_panel.rr_spin.setValue(2.0)
+    assert not window.params_stale  # tornati ai parametri dell'analisi
+    assert button.property("attention") is False
+    tone = window.metric_labels["expectancy_r"].property("tone")
+    assert tone in ("up", "down", "")
+    window.quit_app()
+
+
+def test_disposizione_ricordata_al_riavvio(qapp: QApplication) -> None:
+    from pytrader.gui.main_window import DEFAULT_HIDDEN_COLUMNS, MainWindow
+
+    window = MainWindow()
+    assert window.setup_columns.hidden() == list(DEFAULT_HIDDEN_COLUMNS)
+    window.setup_columns.set_hidden(["P&L"])
+    window.live.signal_columns.set_hidden(["Rischio"])
+    window.splitters["right"].setSizes([700, 160])
+    window.show_params()
+    window.quit_app()
+
+    again = MainWindow()
+    assert again.setup_columns.hidden() == ["P&L"]
+    assert again.live.signal_columns.hidden() == ["Rischio"]
+    assert not again.params_dock.isHidden()  # pannello lasciato aperto: riaperto
+    again.reset_layout()
+    assert again.setup_columns.hidden() == list(DEFAULT_HIDDEN_COLUMNS)
+    assert again.params_dock.isHidden()
+    again.quit_app()
+
+
+def test_riepilogo_parametri() -> None:
+    from pytrader.gui.params_panel import params_summary
+    from pytrader.signals import SignalParams, TargetMode
+
+    text = params_summary(SignalParams(min_rr=2.5, target_mode=TargetMode.FIXED_RR), 0.1)
+    assert "R:R 2,5" in text and "R:R fisso" in text and "Comm. 0,1 %" in text

@@ -8,9 +8,24 @@ from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser, QVBoxLayout
 
 _HELP_HTML = """
 <h2>Guida a PyTrader</h2>
+<h3>Disposizione della finestra</h3>
+<ul>
+<li><b>Barra degli strumenti</b>: Carica dati (Ctrl+L), Analizza (F5), Parametri (Ctrl+P),
+Walk-forward. Quando cambi un parametro dopo l'analisi, <b>Analizza</b> si evidenzia: i
+risultati mostrati non corrispondono più ai valori impostati.</li>
+<li><b>Barra laterale</b>: sorgente dati, riepilogo delle impostazioni (clic per modificarle) e
+metriche del backtest sempre visibili.</li>
+<li><b>Pannello Parametri e rischio</b>: parametri di analisi e capitale. Si aggancia a destra
+o a sinistra, oppure si stacca come finestra separata (pulsante in alto a destra del pannello o
+trascinandone il titolo), anche su un secondo monitor.</li>
+<li><b>Colonne</b>: clic destro sull'intestazione delle tabelle Setup e Segnali per scegliere
+le colonne visibili.</li>
+<li>Posizione dei pannelli, divisori e colonne vengono ricordati;
+<b>Visualizza → Ripristina disposizione</b> torna a quella iniziale.</li>
+</ul>
 <h3>1. Caricare i dati</h3>
 <p>Scegli la sorgente (<b>CSV</b>, <b>ccxt</b> per gli exchange crypto, <b>yfinance</b> per
-azioni/indici/forex), indica simbolo e timeframe e premi <b>Carica</b>. Se non ricordi il
+azioni/indici/forex), indica simbolo e timeframe e premi <b>Carica dati</b>. Se non ricordi il
 ticker, scrivi il nome dell'azienda, del fondo o dell'ETF (es. <i>Vanguard world</i>): dopo un
 istante compare una lista di suggerimenti da cui scegliere; il campo viene compilato con il
 ticker corretto. Con ccxt la ricerca filtra le coppie dell'exchange (es. <i>BTC</i>). Il CSV
@@ -29,7 +44,7 @@ resistenza), entro la prossimità × ATR.</li>
 di buffer × ATR. <b>TP</b> sul livello strutturale successivo: se l'R:R è inferiore al minimo
 il setup viene scartato.</li>
 </ul>
-<h3>3. Capitale e rischio</h3>
+<h3>3. Capitale e rischio (pannello Parametri e rischio)</h3>
 <ul>
 <li><b>Capitale</b>: somma iniziale, nella valuta in cui è quotato lo strumento.</li>
 <li><b>Rischio/trade</b>: percentuale del capitale persa se scatta lo stop loss. La quantità
@@ -62,8 +77,8 @@ suggerita in base a capitale e rischio impostati.</li>
 avviene all'apertura della candela successiva. PyTrader non invia ordini all'exchange.</p>
 <h3>5. Leggere i risultati</h3>
 <p>La tabella <b>Setup</b> elenca tutti i segnali con esito simulato (win/loss/open/pending).
-Seleziona una riga per centrare il grafico. La scheda <b>Backtest</b> riporta win rate,
-expectancy in R, profit factor e drawdown massimo.</p>
+Seleziona una riga per centrare il grafico. Il riquadro <b>Backtest</b> della barra laterale
+riporta win rate, expectancy in R, profit factor e drawdown massimo.</p>
 <p><b>Attenzione</b>: i risultati passati non garantiscono quelli futuri. Valuta sempre
 l'expectancy su un campione ampio prima di usare un setup.</p>
 <h3>6. Ottimizzazione walk-forward</h3>
