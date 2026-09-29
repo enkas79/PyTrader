@@ -40,13 +40,28 @@ e stop molto vicini la quantità viene ridotta (simbolo ⚠) e si rischia meno d
 iniziale.</li>
 </ul>
 <p>Modificando questi valori tabella e metriche si aggiornano subito, senza rifare l'analisi.</p>
-<h3>4. Leggere i risultati</h3>
+<h3>4. Segnali live</h3>
+<ul>
+<li>Scegli sorgente, simbolo e timeframe, poi nella scheda <b>Live</b> premi
+<b>Aggiungi mercato corrente</b>. Ripeti per tutti i mercati da seguire.</li>
+<li><b>Avvia monitoraggio</b>: ogni mercato viene controllato alla chiusura di ogni candela
+(per Yahoo almeno ogni 5 minuti). Si analizzano solo candele chiuse.</li>
+<li>Quando l'ultima candela chiusa genera un setup ricevi una <b>notifica desktop</b> con
+direzione, entry stimata, stop loss, take profit e R:R. Lo storico mostra anche la quantità
+suggerita in base a capitale e rischio impostati.</li>
+<li>Chiudendo la finestra con il monitoraggio attivo, PyTrader resta nell'area di notifica
+(icona vicino all'orologio): per uscire usa <b>Esci</b> dal menu dell'icona o da File.</li>
+<li>Doppio clic su un segnale per aprire quel mercato nel grafico.</li>
+</ul>
+<p><b>Nota</b>: l'entry è una stima (chiusura della candela del segnale); l'ingresso reale
+avviene all'apertura della candela successiva. PyTrader non invia ordini all'exchange.</p>
+<h3>5. Leggere i risultati</h3>
 <p>La tabella <b>Setup</b> elenca tutti i segnali con esito simulato (win/loss/open/pending).
 Seleziona una riga per centrare il grafico. La scheda <b>Backtest</b> riporta win rate,
 expectancy in R, profit factor e drawdown massimo.</p>
 <p><b>Attenzione</b>: i risultati passati non garantiscono quelli futuri. Valuta sempre
 l'expectancy su un campione ampio prima di usare un setup.</p>
-<h3>5. Esportazione</h3>
+<h3>6. Esportazione</h3>
 <p><b>File → Esporta JSON</b> salva setup, esiti, livelli correnti e metriche.</p>
 """
 

@@ -34,3 +34,9 @@ def random_walk() -> pd.DataFrame:
     return pd.DataFrame(
         {"open": open_, "high": high, "low": low, "close": close, "volume": volume}, index=index
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_app_home(tmp_path, monkeypatch) -> None:
+    """Watchlist, storico e log dei test non toccano la home reale."""
+    monkeypatch.setenv("PYTRADER_HOME", str(tmp_path / "pytrader_home"))

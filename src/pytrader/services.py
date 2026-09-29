@@ -18,7 +18,7 @@ from pytrader.backtest import (
     BacktestResult,
     MoneyResult,
 )
-from pytrader.data import CsvDataSource, DataSource, validate_ohlcv
+from pytrader.data import CsvDataSource, DataSource, drop_unclosed_candle, validate_ohlcv
 from pytrader.data.symbol_search import SymbolMatch, SymbolSearcher
 from pytrader.models import ValidationReport
 from pytrader.signals import AnalysisResult, SignalEngine, SignalParams
@@ -99,16 +99,22 @@ class SymbolSearchService:
         return YFinanceSymbolSearcher()
 
 
-def load_data(request: DataRequest) -> LoadedData:
+def load_data(request: DataRequest, now: Optional[pd.Timestamp] = None) -> LoadedData:
+    """Scarica e valida la serie. Per le sorgenti remote esclude la candela in formazione:
+    tutte le analisi usano solo candele chiuse."""
     if request.kind is not SourceKind.CSV and not request.symbol.strip():
         raise ValueError("Specifica un simbolo")
     is_csv = request.kind is SourceKind.CSV
     # Il CSV è caricato per intero: limite e timeframe valgono solo per le sorgenti remote
-    raw = make_source(request).fetch(
-        request.symbol.strip(), request.timeframe, limit=None if is_csv else request.limit
-    )
+    limit = None if is_csv or request.limit is None else request.limit + 1
+    raw = make_source(request).fetch(request.symbol.strip(), request.timeframe, limit=limit)
     timeframe: Optional[str] = None if is_csv else request.timeframe
     frame, report = validate_ohlcv(raw, timeframe)
+    if not is_csv:
+        frame, dropped = drop_unclosed_candle(frame, request.timeframe, now)
+        if dropped:
+            report.rows_out = len(frame)
+            report.warnings.append("Ultima candela in formazione esclusa dall'analisi")
     if frame.empty:
         raise ValueError("Nessuna candela valida dopo la validazione")
     return LoadedData(request=request, frame=frame, report=report)

@@ -24,12 +24,16 @@ take profit, verificandoli con un backtest a barre.
 - **Capitale e rischio**: position sizing a rischio fisso (% del capitale per trade), limite
   di leva, reinvestimento opzionale dei profitti; P&L per trade, capitale finale, rendimento e
   drawdown in valuta.
+- **Segnali live**: watchlist multi-mercato controllata a ogni chiusura di candela, notifiche
+  desktop anche con la finestra ridotta nell'area di notifica, storico persistente dei segnali
+  con quantità suggerita. Nessun ordine viene inviato all'exchange.
 - **GUI**: grafico interattivo pyqtgraph con fasce S/R e livelli dei setup, tabella dei
   setup, export JSON, guida integrata, verifica aggiornamenti da GitHub Releases.
 
 ### Nessun look-ahead
 
-Ogni valore alla candela *t* usa solo candele chiuse ≤ *t*. Un pivot con finestra *n* è
+Ogni valore alla candela *t* usa solo candele chiuse ≤ *t*. Per le sorgenti remote la candela
+ancora in formazione restituita da exchange e Yahoo viene esclusa. Un pivot con finestra *n* è
 utilizzabile solo da *t + n*. I test (`tests/test_signals.py`, `tests/test_analysis.py`)
 verificano che troncare la serie non modifichi pivot, pattern e setup già generati.
 
@@ -45,6 +49,7 @@ src/
     ├── signals/            # SignalEngine: confluenza e gestione del rischio
     ├── backtest/           # Backtester e metriche
     ├── services.py         # casi d'uso senza Qt (caricamento, analisi, export)
+    ├── live/               # watchlist, scanner a chiusura candela, storico segnali
     ├── updater/            # GitHub Releases: confronto versioni, download, installer
     └── gui/                # MainWindow, grafico, worker QThreadPool, dialoghi
 tests/                      # pytest

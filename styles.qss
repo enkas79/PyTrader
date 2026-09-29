@@ -106,7 +106,15 @@ QPushButton:disabled {
 QPushButton#secondaryButton {
     background-color: #2a2f3a;
     color: #e6e9ef;
-    padding: 4px 8px;
+    padding: 8px 12px;
+}
+QPushButton#iconButton {
+    background-color: #2a2f3a;
+    color: #e6e9ef;
+    padding: 4px;
+}
+QPushButton#iconButton:hover {
+    background-color: #353b48;
 }
 QPushButton#secondaryButton:hover {
     background-color: #353b48;
