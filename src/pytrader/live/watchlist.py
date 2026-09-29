@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
 from pytrader.data import parse_timeframe
+from pytrader.live.schedule import allowed_intervals
 from pytrader.services import SourceKind
 from pytrader.storage import app_data_dir, read_json, write_json_atomic
 
@@ -17,6 +18,7 @@ class WatchItem:
     symbol: str
     timeframe: str
     exchange: str = ""  # solo ccxt
+    interval_min: Optional[int] = None  # None = automatico (alla chiusura della candela)
 
     def __post_init__(self) -> None:
         if self.kind is SourceKind.CSV:
@@ -24,9 +26,14 @@ class WatchItem:
         if not self.symbol.strip():
             raise ValueError("Simbolo mancante")
         parse_timeframe(self.timeframe)  # solleva ValueError se non valido
+        if self.interval_min is not None and self.interval_min not in allowed_intervals(
+            self.kind, self.timeframe
+        ):
+            raise ValueError(f"Intervallo di {self.interval_min} min non ammesso per {self.label}")
 
     @property
     def key(self) -> str:
+        """Identità del mercato: l'intervallo di controllo non ne fa parte."""
         return f"{self.kind.value}:{self.exchange}:{self.symbol}:{self.timeframe}"
 
     @property
@@ -41,19 +48,23 @@ class WatchItem:
         symbol, timeframe = rest.rsplit(":", 1)
         return cls(kind=SourceKind(kind), symbol=symbol, timeframe=timeframe, exchange=exchange)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["kind"] = self.kind.value
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WatchItem:
-        return cls(
+        item = cls(
             kind=SourceKind(data["kind"]),
             symbol=str(data["symbol"]),
             timeframe=str(data["timeframe"]),
             exchange=str(data.get("exchange", "")),
         )
+        interval = data.get("interval_min")
+        if isinstance(interval, int) and interval in allowed_intervals(item.kind, item.timeframe):
+            item = replace(item, interval_min=interval)
+        return item  # intervallo mancante o non più ammesso: automatico
 
 
 @dataclass
@@ -86,6 +97,10 @@ class Watchlist:
             return False
         self.items.append(item)
         return True
+
+    def update(self, item: WatchItem) -> None:
+        """Sostituisce il mercato con la stessa chiave (es. nuovo intervallo di controllo)."""
+        self.items = [item if i.key == item.key else i for i in self.items]
 
     def remove(self, key: str) -> None:
         self.items = [i for i in self.items if i.key != key]

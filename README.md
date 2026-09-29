@@ -24,11 +24,16 @@ take profit, verificandoli con un backtest a barre.
 - **Capitale e rischio**: position sizing a rischio fisso (% del capitale per trade), limite
   di leva, reinvestimento opzionale dei profitti; P&L per trade, capitale finale, rendimento e
   drawdown in valuta.
-- **Segnali live**: watchlist multi-mercato controllata a ogni chiusura di candela, notifiche
+- **Walk-forward**: ottimizzazione su griglia di parametri scelta in-sample e verificata
+  out-of-sample su finestre consecutive (mobili o ancorate), obiettivo SQN/expectancy/totale R,
+  efficienza walk-forward e stabilità delle scelte per riconoscere l'overfitting.
+- **Segnali live**: watchlist multi-mercato controllata a ogni chiusura di candela (o a un
+  intervallo scelto per mercato, entro limiti plausibili per sorgente e timeframe), notifiche
   desktop anche con la finestra ridotta nell'area di notifica, storico persistente dei segnali
   con quantità suggerita. Nessun ordine viene inviato all'exchange.
 - **GUI**: grafico interattivo pyqtgraph con fasce S/R e livelli dei setup, tabella dei
-  setup, export JSON, guida integrata, verifica aggiornamenti da GitHub Releases.
+  setup, export JSON, tema scuro/chiaro/di sistema, guida integrata, verifica aggiornamenti
+  da GitHub Releases.
 
 ### Nessun look-ahead
 
@@ -48,13 +53,15 @@ src/
     ├── analysis/           # indicatori, pivot, livelli, pattern
     ├── signals/            # SignalEngine: confluenza e gestione del rischio
     ├── backtest/           # Backtester e metriche
+    ├── optimize/           # walk-forward: griglia, finestre IS/OOS, selezione
     ├── services.py         # casi d'uso senza Qt (caricamento, analisi, export)
-    ├── live/               # watchlist, scanner a chiusura candela, storico segnali
+    ├── live/               # watchlist, pianificazione controlli, scanner, storico segnali
+    ├── settings.py         # preferenze (tema) in ~/.pytrader/settings.json
     ├── updater/            # GitHub Releases: confronto versioni, download, installer
-    └── gui/                # MainWindow, grafico, worker QThreadPool, dialoghi
+    └── gui/                # MainWindow, grafico, temi, worker QThreadPool, dialoghi
 tests/                      # pytest
 installer/pytrader.nsi      # installer Windows (NSIS)
-styles.qss                  # tema Qt centralizzato
+styles.qss                  # foglio di stile unico con segnaposto dei colori (gui/theme.py)
 version.txt                 # versione corrente (fonte unica)
 ```
 

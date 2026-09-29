@@ -21,8 +21,8 @@ import pandas as pd
 from pytrader.analysis import (
     LevelParams,
     PatternParams,
+    PivotArrays,
     atr,
-    build_levels,
     detect_patterns,
     find_pivots,
     volume_sma,
@@ -54,6 +54,22 @@ class SignalParams:
         if self.min_rr <= 0 or self.sl_buffer_atr < 0 or self.proximity_atr < 0:
             raise ValueError("min_rr > 0, sl_buffer_atr >= 0 e proximity_atr >= 0 richiesti")
 
+    @property
+    def feature_key(self) -> tuple[object, ...]:
+        """Parametri da cui dipendono gli indicatori: stessi valori -> ``Features`` riusabili."""
+        return (self.atr_period, self.pivot_window, self.volume_period, self.patterns)
+
+
+@dataclass(frozen=True)
+class Features:
+    """Indicatori, pivot e pattern di una serie: non dipendono da soglie, livelli e target,
+    quindi l'ottimizzazione li calcola una sola volta per combinazione di periodi."""
+
+    atr: pd.Series
+    volume_avg: pd.Series
+    pivots: pd.DataFrame
+    patterns: pd.DataFrame
+
 
 @dataclass
 class AnalysisResult:
@@ -74,12 +90,22 @@ class SignalEngine:
     def __init__(self, params: Optional[SignalParams] = None) -> None:
         self.params = params or SignalParams()
 
-    def analyze(self, df: pd.DataFrame) -> AnalysisResult:
+    def features(self, df: pd.DataFrame) -> Features:
         p = self.params
-        atr_s = atr(df, p.atr_period)
-        vol_s = volume_sma(df, p.volume_period)
-        pivots = find_pivots(df, p.pivot_window)
-        flags = detect_patterns(df, p.patterns)
+        return Features(
+            atr=atr(df, p.atr_period),
+            volume_avg=volume_sma(df, p.volume_period),
+            pivots=find_pivots(df, p.pivot_window),
+            patterns=detect_patterns(df, p.patterns),
+        )
+
+    def analyze(self, df: pd.DataFrame, features: Optional[Features] = None) -> AnalysisResult:
+        """``features`` (da ``self.features(df)``) evita di ricalcolare gli indicatori."""
+        p = self.params
+        feats = features or self.features(df)
+        atr_s, vol_s, pivots, flags = feats.atr, feats.volume_avg, feats.pivots, feats.patterns
+        pivot_arrays = PivotArrays.from_frame(pivots)
+        ohlc = tuple(df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
 
         setups: list[TradeSetup] = []
         directional = sorted(
@@ -98,19 +124,21 @@ class SignalEngine:
                 np.isfinite(vol_avg_v[i]) and vol_v[i] >= p.min_volume_ratio * vol_avg_v[i]
             ):
                 continue
-            levels = build_levels(pivots, int(i), float(atr_v[i]), p.levels)
+            levels = pivot_arrays.levels_at(int(i), float(atr_v[i]), p.levels)
             if not levels:
                 continue
             for col, ptype in enumerate(directional):
                 if not flag_matrix[i, col]:
                     continue
-                setup = self._build_setup(df, int(i), ptype, levels, float(atr_v[i]))
+                setup = self._build_setup(df, ohlc, int(i), ptype, levels, float(atr_v[i]))
                 if setup is not None:
                     setups.append(setup)
                     break  # un solo setup per candela: vince il pattern più forte
 
         last = len(df) - 1
-        final_levels = build_levels(pivots, last, float(atr_v[last]), p.levels) if last >= 0 else []
+        final_levels = (
+            pivot_arrays.levels_at(last, float(atr_v[last]), p.levels) if last >= 0 else []
+        )
         return AnalysisResult(
             data=df,
             atr=atr_s,
@@ -122,15 +150,22 @@ class SignalEngine:
         )
 
     def _build_setup(
-        self, df: pd.DataFrame, i: int, ptype: PatternType, levels: list[Level], atr_value: float
+        self,
+        df: pd.DataFrame,
+        ohlc: tuple[np.ndarray, ...],
+        i: int,
+        ptype: PatternType,
+        levels: list[Level],
+        atr_value: float,
     ) -> Optional[TradeSetup]:
         p = self.params
         direction = ptype.bias
         assert direction is not None
+        opens, highs, lows, closes = ohlc
         start = max(0, i - ptype.n_bars + 1)
-        close_i = float(df["close"].iat[i])
-        pat_low = float(df["low"].iloc[start : i + 1].min())
-        pat_high = float(df["high"].iloc[start : i + 1].max())
+        close_i = float(closes[i])
+        pat_low = float(lows[start : i + 1].min())
+        pat_high = float(highs[start : i + 1].max())
         max_dist = p.proximity_atr * atr_value
 
         if direction is Direction.LONG:
@@ -147,8 +182,8 @@ class SignalEngine:
             return None
         zone = min(zones, key=lambda lv: (lv.distance(anchor), -lv.touches))
 
-        has_next = i + 1 < len(df)
-        entry = float(df["open"].iat[i + 1]) if has_next else close_i
+        has_next = i + 1 < len(opens)
+        entry = float(opens[i + 1]) if has_next else close_i
         buffer = p.sl_buffer_atr * atr_value
         if direction is Direction.LONG:
             stop = min(zone.lower, pat_low) - buffer

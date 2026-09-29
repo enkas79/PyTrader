@@ -10,20 +10,25 @@ import pyqtgraph as pg
 from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPicture
 
+from pytrader.gui.theme import Palette, current_palette
 from pytrader.models import Direction, Level, TradeSetup
 
-# Palette coerente con styles.qss (tema scuro)
-BG = "#16181d"
-FG = "#c9ced6"
 GRID_ALPHA = 0.15
-UP = QColor("#26a69a")
-DOWN = QColor("#ef5350")
-LEVEL_FILL = QColor(95, 145, 255, 40)
-LEVEL_EDGE = QColor(95, 145, 255, 110)
-ENTRY = QColor("#e0e0e0")
-STOP = QColor("#ef5350")
-TARGET = QColor("#26a69a")
 SETUP_SPAN = 15  # candele su cui disegnare i livelli di un setup
+
+
+class ChartColors:
+    """Colori del grafico derivati dalla palette del tema."""
+
+    def __init__(self, palette: Palette) -> None:
+        r, g, b = (int(v) for v in palette.level_rgb.split(","))
+        self.bg = palette.chart_bg
+        self.fg = palette.chart_fg
+        self.up = QColor(palette.up)
+        self.down = QColor(palette.down)
+        self.level_fill = QColor(r, g, b, 40)
+        self.level_edge = QColor(r, g, b, 110)
+        self.entry = QColor(palette.entry)
 
 
 def _num(value: float) -> str:
@@ -34,18 +39,18 @@ def _num(value: float) -> str:
 class CandlestickItem(pg.GraphicsObject):
     """Candele pre-renderizzate in un ``QPicture`` (x = posizione della candela)."""
 
-    def __init__(self, df: pd.DataFrame) -> None:
+    def __init__(self, df: pd.DataFrame, colors: ChartColors) -> None:
         super().__init__()
         self._picture = QPicture()
         self._bounds = QRectF()
-        self._render(df)
+        self._render(df, colors)
 
-    def _render(self, df: pd.DataFrame) -> None:
+    def _render(self, df: pd.DataFrame, colors: ChartColors) -> None:
         painter = QPainter(self._picture)
         o, h, lo, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
         width = 0.35
         for i in range(len(df)):
-            color = UP if c[i] >= o[i] else DOWN
+            color = colors.up if c[i] >= o[i] else colors.down
             painter.setPen(pg.mkPen(color, width=1))
             painter.drawLine(QPointF(i, lo[i]), QPointF(i, h[i]))
             painter.setBrush(pg.mkBrush(color))
@@ -87,7 +92,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     def __init__(self, parent: Any = None) -> None:
         super().__init__(parent=parent)
         pg.setConfigOptions(antialias=True)
-        self.setBackground(BG)
+        self._colors = ChartColors(current_palette())
         self._time_axis = TimeAxis()
         self.price_plot: pg.PlotItem = self.addPlot(
             row=0, col=0, axisItems={"bottom": self._time_axis}
@@ -99,27 +104,51 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self.volume_plot.getAxis("bottom").setStyle(showValues=False)
         for plot in (self.price_plot, self.volume_plot):
             plot.showGrid(x=True, y=True, alpha=GRID_ALPHA)
-            for axis in ("left", "bottom"):
-                plot.getAxis(axis).setTextPen(FG)
-                plot.getAxis(axis).setPen(pg.mkPen(FG, width=1))
-        self.price_plot.setLabel("left", "Prezzo", color=FG)
-        self.volume_plot.setLabel("left", "Volume", color=FG)
         self._df: Optional[pd.DataFrame] = None
+        self._levels: list[Level] = []
+        self._setups: list[TradeSetup] = []
         self._overlay: list[Any] = []
         self._setup_items: list[Any] = []
+        self._style_axes()
+
+    def _style_axes(self) -> None:
+        fg = self._colors.fg
+        self.setBackground(self._colors.bg)
+        for plot in (self.price_plot, self.volume_plot):
+            for axis in ("left", "bottom"):
+                plot.getAxis(axis).setTextPen(fg)
+                plot.getAxis(axis).setPen(pg.mkPen(fg, width=1))
+        self.price_plot.setLabel("left", "Prezzo", color=fg)
+        self.volume_plot.setLabel("left", "Volume", color=fg)
+
+    def apply_palette(self, palette: Palette) -> None:
+        """Cambio tema: ridisegna candele, livelli e setup mantenendo lo zoom corrente."""
+        self._colors = ChartColors(palette)
+        self._style_axes()
+        if self._df is None or self._df.empty:
+            return
+        (x0, x1), (y0, y1) = self.price_plot.viewRange()
+        levels, setups = list(self._levels), list(self._setups)
+        self.set_data(self._df)
+        self.set_levels(levels)
+        self.set_setups(setups)
+        self.price_plot.setXRange(x0, x1, padding=0)
+        self.price_plot.setYRange(y0, y1, padding=0)
 
     def set_data(self, df: pd.DataFrame) -> None:
         self.price_plot.clear()
         self.volume_plot.clear()
         self._overlay.clear()
         self._setup_items.clear()
+        self._levels, self._setups = [], []
         self._df = df
         self._time_axis.index = pd.DatetimeIndex(df.index)
         if df.empty:
             return
-        self.price_plot.addItem(CandlestickItem(df))
+        self.price_plot.addItem(CandlestickItem(df, self._colors))
         x = np.arange(len(df))
-        colors = [UP if c >= o else DOWN for o, c in zip(df["open"], df["close"])]
+        up, down = self._colors.up, self._colors.down
+        colors = [up if c >= o else down for o, c in zip(df["open"], df["close"])]
         bars = pg.BarGraphItem(x=x, height=df["volume"].to_numpy(), width=0.7, brushes=colors)
         bars.setOpacity(0.6)
         self.volume_plot.addItem(bars)
@@ -144,6 +173,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for item in self._overlay:
             self.price_plot.removeItem(item)
         self._overlay.clear()
+        self._levels = list(levels)
         for lv in levels:
             lower, upper = lv.lower, lv.upper
             if upper - lower < 1e-12:  # livello puntiforme: fascia minima visibile
@@ -153,8 +183,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 values=(lower, upper),
                 orientation="horizontal",
                 movable=False,
-                brush=pg.mkBrush(LEVEL_FILL),
-                pen=pg.mkPen(LEVEL_EDGE),
+                brush=pg.mkBrush(self._colors.level_fill),
+                pen=pg.mkPen(self._colors.level_edge),
             )
             region.setZValue(-10)
             region.setToolTip(f"Livello {_num(lv.price)} — tocchi: {lv.touches}")
@@ -165,15 +195,17 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for item in self._setup_items:
             self.price_plot.removeItem(item)
         self._setup_items.clear()
+        self._setups = list(setups)
+        c = self._colors
         longs = [s for s in setups if s.direction is Direction.LONG]
         shorts = [s for s in setups if s.direction is Direction.SHORT]
-        for group, symbol, color in ((longs, "t1", UP), (shorts, "t", DOWN)):
+        for group, symbol, color in ((longs, "t1", c.up), (shorts, "t", c.down)):
             if not group:
                 continue
             xs = [s.signal_index for s in group]
             ys = [s.level.lower if s in longs else s.level.upper for s in group]
             scatter = pg.ScatterPlotItem(
-                x=xs, y=ys, symbol=symbol, size=12, brush=pg.mkBrush(color), pen=pg.mkPen(BG)
+                x=xs, y=ys, symbol=symbol, size=12, brush=pg.mkBrush(color), pen=pg.mkPen(c.bg)
             )
             self.price_plot.addItem(scatter)
             self._setup_items.append(scatter)
@@ -184,10 +216,11 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         x0 = s.signal_index + 1
         x1 = x0 + SETUP_SPAN
         width = 2 if highlight else 1
+        c = self._colors
         for price, color, label in (
-            (s.entry, ENTRY, "Entry"),
-            (s.stop_loss, STOP, "SL"),
-            (s.take_profit, TARGET, "TP"),
+            (s.entry, c.entry, "Entry"),
+            (s.stop_loss, c.down, "SL"),
+            (s.take_profit, c.up, "TP"),
         ):
             line = pg.PlotDataItem(
                 [x0, x1],

@@ -36,7 +36,7 @@ def test_main_window_popola_tabella(qapp: QApplication, random_walk: pd.DataFram
     window.table.selectRow(0)  # centra il grafico sul setup
     assert window.export_act.isEnabled()
     menus = [a.text() for a in window.menuBar().actions()]
-    assert menus == ["&File", "&Aiuto"]
+    assert menus == ["&File", "&Visualizza", "&Strumenti", "&Aiuto"]
     window.close()
 
 
@@ -136,7 +136,7 @@ def test_live_segnale_notificato_e_deduplicato(qapp: QApplication) -> None:
     assert live.signal_table.rowCount() == 1
     assert live.signal_table.item(0, 3).text() == "Long"
     assert live.signal_table.item(0, 9).text() != "—"  # quantità suggerita dal capitale
-    assert "Segnale LONG" in live.watch_table.item(0, 4).text()
+    assert "Segnale LONG" in live.watch_table.item(0, 5).text()
     window.quit_app()
 
 
@@ -152,4 +152,114 @@ def test_live_aggiungi_mercato_corrente_e_riapri(qapp: QApplication) -> None:
     window.live._add_current()  # duplicato ignorato
     assert [i.key for i in window.live.watchlist.items] == ["ccxt:binance:ETH/USDT:4h"]
     assert Watchlist.load().items[0].symbol == "ETH/USDT"  # persistito su disco
+    window.quit_app()
+
+
+def test_cambio_tema_ricolora_e_salva(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.gui.theme import DARK, LIGHT, current_palette
+    from pytrader.settings import AppSettings, ThemeMode
+
+    window = MainWindow()
+    frame, report = validate_ohlcv(random_walk)
+    window._data = LoadedData(DataRequest(kind=SourceKind.CSV), frame, report)
+    window.chart.set_data(frame)
+    window._on_analyzed(run_analysis(frame))
+    try:
+        window.set_theme(ThemeMode.LIGHT)
+        assert current_palette() is LIGHT
+        assert qapp.styleSheet() == load_stylesheet(LIGHT) != load_stylesheet(DARK)
+        assert AppSettings.load().theme is ThemeMode.LIGHT
+        assert window.theme_actions[ThemeMode.LIGHT].isChecked()
+        colors = {
+            window.table.item(r, 1).foreground().color().name()
+            for r in range(window.table.rowCount())
+        }
+        assert colors <= {LIGHT.up, LIGHT.down}
+        assert window.chart._levels  # livelli ridisegnati dopo il cambio tema
+    finally:
+        window.set_theme(ThemeMode.DARK)
+        window.close()
+    assert current_palette() is DARK
+
+
+def test_walk_forward_dialogo_applica_parametri(
+    qapp: QApplication, random_walk: pd.DataFrame
+) -> None:
+    from PyQt6.QtCore import QThreadPool
+
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow
+
+    window = MainWindow()
+    frame, report = validate_ohlcv(random_walk)
+    window._on_loaded(LoadedData(DataRequest(kind=SourceKind.CSV), frame, report))
+    QThreadPool.globalInstance().waitForDone(5000)
+    qapp.processEvents()
+    assert window.wf_act.isEnabled()
+    window._open_walk_forward()
+    dialog = window._wf_dialog
+    assert dialog is not None
+    dialog.grid_edits["proximity_atr"].setText("0,3; 0,8")
+    dialog.grid_edits["sl_buffer_atr"].setText("1")
+    dialog.grid_edits["min_rr"].setText("1,5")
+    dialog.folds_spin.setValue(3)
+    dialog.ratio_spin.setValue(2.0)
+    dialog.min_trades_spin.setValue(1)
+    assert dialog.grid().size == 2
+    dialog._run()
+    for _ in range(200):
+        QThreadPool.globalInstance().waitForDone(50)
+        qapp.processEvents()
+        if not dialog.is_running:
+            break
+    assert dialog.fold_table.rowCount() == 3
+    assert dialog.apply_button.isEnabled()
+    recommended = dialog._result.recommended  # type: ignore[union-attr]
+    dialog._apply()
+    assert window.prox_spin.value() == pytest.approx(recommended.proximity_atr)
+    assert window.rr_spin.value() == pytest.approx(1.5)
+    QThreadPool.globalInstance().waitForDone(5000)
+    window.close()
+
+
+def test_griglia_non_valida_segnalata(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    from pytrader.backtest import BacktestParams
+    from pytrader.gui.walkforward_dialog import WalkForwardDialog
+    from pytrader.signals import SignalParams
+
+    dialog = WalkForwardDialog(random_walk, SignalParams(), BacktestParams())
+    dialog.grid_edits["pivot_window"].setText("2,5")
+    with pytest.raises(ValueError, match="interi"):
+        dialog.grid()
+    assert "interi" in dialog.count_label.text()
+    dialog.grid_edits["pivot_window"].setText("3; 5")
+    dialog.grid_edits["min_rr"].setText("0; 2")
+    with pytest.raises(ValueError, match="> 0"):
+        dialog.grid()
+    dialog.close()
+
+
+def test_intervallo_controllo_per_mercato(qapp: QApplication) -> None:
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.live import WatchItem, Watchlist
+
+    window = MainWindow()
+    live = window.live
+    crypto = WatchItem(SourceKind.CCXT, "BTC/USDT", "1h", "binance")
+    stock = WatchItem(SourceKind.YFINANCE, "AAPL", "15m")
+    live.watchlist.add(crypto)
+    live.watchlist.add(stock)
+    live._refresh_watchlist()
+    combo = live.watch_table.cellWidget(0, 1)
+    assert [combo.itemData(i) for i in range(combo.count())] == [None, 1, 2, 5, 10, 15, 30, 60]
+    yahoo_combo = live.watch_table.cellWidget(1, 1)
+    # 15m su Yahoo: 2 e 10 non dividono 15 minuti, quindi restano 5 e 15
+    assert [yahoo_combo.itemData(i) for i in range(yahoo_combo.count())] == [None, 5, 15]
+    combo.setCurrentIndex(combo.findData(15))
+    assert live.watchlist.items[0].interval_min == 15
+    assert Watchlist.load(live.watchlist.path).items[0].interval_min == 15
+    live._refresh_watchlist()  # aggiornamento testi: il selettore resta lo stesso
+    assert live.watch_table.cellWidget(0, 1) is combo
     window.quit_app()

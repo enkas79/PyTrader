@@ -65,14 +65,36 @@ def build_levels(
     Usa solo pivot con ``confirm_index <= at_index`` e ``index >= at_index - lookback``;
     la tolleranza è ``tolerance_atr × ATR(at_index)``.
     """
-    if not np.isfinite(atr_value) or atr_value <= 0:
-        return []
-    known = pivots[
-        (pivots["confirm_index"] <= at_index) & (pivots["index"] >= at_index - params.lookback)
-    ]
-    return cluster_prices(
-        known["price"].to_numpy(dtype=float),
-        known["index"].to_numpy(dtype=np.int64),
-        params.tolerance_atr * atr_value,
-        params.min_touches,
-    )
+    return PivotArrays.from_frame(pivots).levels_at(at_index, atr_value, params)
+
+
+@dataclass(frozen=True)
+class PivotArrays:
+    """Pivot in array numpy ordinati per ``confirm_index``: evita il filtraggio pandas
+    a ogni candela (chiamato migliaia di volte da ``SignalEngine``)."""
+
+    index: np.ndarray
+    confirm_index: np.ndarray
+    price: np.ndarray
+
+    @classmethod
+    def from_frame(cls, pivots: pd.DataFrame) -> PivotArrays:
+        order = np.argsort(pivots["confirm_index"].to_numpy(), kind="mergesort")
+        return cls(
+            index=pivots["index"].to_numpy(dtype=np.int64)[order],
+            confirm_index=pivots["confirm_index"].to_numpy(dtype=np.int64)[order],
+            price=pivots["price"].to_numpy(dtype=float)[order],
+        )
+
+    def levels_at(self, at_index: int, atr_value: float, params: LevelParams) -> list[Level]:
+        if not np.isfinite(atr_value) or atr_value <= 0:
+            return []
+        known = np.searchsorted(self.confirm_index, at_index, side="right")
+        idx = self.index[:known]
+        mask = idx >= at_index - params.lookback
+        return cluster_prices(
+            self.price[:known][mask],
+            idx[mask],
+            params.tolerance_atr * atr_value,
+            params.min_touches,
+        )

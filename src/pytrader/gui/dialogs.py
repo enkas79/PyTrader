@@ -46,6 +46,11 @@ iniziale.</li>
 <b>Aggiungi mercato corrente</b>. Ripeti per tutti i mercati da seguire.</li>
 <li><b>Avvia monitoraggio</b>: ogni mercato viene controllato alla chiusura di ogni candela
 (per Yahoo almeno ogni 5 minuti). Si analizzano solo candele chiuse.</li>
+<li><b>Controllo</b>: nella watchlist puoi scegliere per ogni mercato un intervallo fisso
+invece di <i>Automatico</i>. Le scelte dipendono dal mercato: minimo 1 minuto per gli exchange
+crypto, 2 minuti per Yahoo (limita le richieste), mai oltre la durata della candela né oltre un
+giorno, e solo valori che dividono esattamente il timeframe, così nessuna chiusura viene
+saltata. Un intervallo più lungo riduce il traffico ma ritarda la notifica.</li>
 <li>Quando l'ultima candela chiusa genera un setup ricevi una <b>notifica desktop</b> con
 direzione, entry stimata, stop loss, take profit e R:R. Lo storico mostra anche la quantità
 suggerita in base a capitale e rischio impostati.</li>
@@ -61,7 +66,27 @@ Seleziona una riga per centrare il grafico. La scheda <b>Backtest</b> riporta wi
 expectancy in R, profit factor e drawdown massimo.</p>
 <p><b>Attenzione</b>: i risultati passati non garantiscono quelli futuri. Valuta sempre
 l'expectancy su un campione ampio prima di usare un setup.</p>
-<h3>6. Esportazione</h3>
+<h3>6. Ottimizzazione walk-forward</h3>
+<p><b>Strumenti → Ottimizzazione walk-forward</b> prova tutte le combinazioni dei valori
+indicati (separati da <i>;</i>). La serie è divisa in <b>fold</b>: in ognuno i parametri sono
+scelti sulla finestra <b>in-sample</b> (IS) e verificati sulla finestra successiva
+<b>out-of-sample</b> (OOS), mai vista durante la scelta.</p>
+<ul>
+<li>Conta solo il <b>risultato OOS</b>: è la stima più onesta del comportamento futuro.</li>
+<li><b>Efficienza walk-forward</b> = expectancy OOS / expectancy IS. Sotto il 50% il vantaggio
+visto nel backtest è in gran parte overfitting.</li>
+<li><b>Stabilità</b>: se i parametri scelti cambiano a ogni fold, la scelta insegue il
+rumore.</li>
+<li>Servono almeno 30 trade OOS per giudicare. Più combinazioni provi, più è facile trovarne
+una buona per caso: preferisci griglie piccole.</li>
+<li><b>Applica parametri consigliati</b> imposta i valori scelti sulla finestra più recente e
+ripete l'analisi.</li>
+</ul>
+<p>Lo slippage non è simulato: i risultati reali saranno peggiori.</p>
+<h3>7. Tema</h3>
+<p><b>Visualizza → Tema</b>: scuro, chiaro o come il sistema operativo. La scelta viene
+ricordata al riavvio.</p>
+<h3>8. Esportazione</h3>
 <p><b>File → Esporta JSON</b> salva setup, esiti, livelli correnti e metriche.</p>
 """
 

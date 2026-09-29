@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +14,7 @@ from PyQt6.QtCore import Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -27,15 +29,28 @@ from PyQt6.QtWidgets import (
 
 from pytrader.backtest import MoneyParams
 from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
+from pytrader.gui.theme import current_palette
 from pytrader.gui.workers import Worker
-from pytrader.live import LiveScanner, LiveSignal, ScanResult, SignalHistory, WatchItem, Watchlist
-from pytrader.live.scanner import next_check_time
+from pytrader.live import (
+    LiveScanner,
+    LiveSignal,
+    ScanResult,
+    SignalHistory,
+    WatchItem,
+    Watchlist,
+    allowed_intervals,
+    format_interval,
+    next_check_time,
+)
 from pytrader.services import SourceKind
 from pytrader.signals import SignalParams
 
 logger = logging.getLogger(__name__)
 
-WATCH_COLUMNS = ("Mercato", "Ultima candela chiusa", "Prezzo", "Prossimo controllo", "Stato")
+WATCH_COLUMNS = (
+    "Mercato", "Controllo", "Ultima candela chiusa", "Prezzo", "Prossimo controllo", "Stato",
+)  # fmt: skip
+INTERVAL_COL = 1
 SIGNAL_COLUMNS = (
     "Rilevato", "Mercato", "Candela", "Direzione", "Pattern", "Entry ~",
     "Stop Loss", "Take Profit", "R:R", "Quantità", "Rischio",
@@ -43,13 +58,41 @@ SIGNAL_COLUMNS = (
 TICK_MS = 5_000
 ERROR_RETRY = pd.Timedelta(minutes=1)
 
-_UP, _DOWN = QColor("#26a69a"), QColor("#ef5350")
-
 
 def _local(ts: pd.Timestamp, fmt: str = "%d/%m %H:%M") -> str:
     """Timestamp UTC -> ora locale del PC."""
     tz = datetime.now().astimezone().tzinfo
     return ts.tz_convert(tz).strftime(fmt)
+
+
+def next_due(item: WatchItem, now: pd.Timestamp) -> pd.Timestamp:
+    """Prossimo controllo del mercato secondo l'intervallo scelto (o automatico)."""
+    return next_check_time(
+        item.timeframe, now, aligned=item.kind is SourceKind.CCXT, interval_min=item.interval_min
+    )
+
+
+def interval_combo(item: WatchItem) -> QComboBox:
+    """Scelte ammesse per il mercato: automatico + intervalli plausibili per sorgente e
+    timeframe (vedi ``allowed_intervals``)."""
+    combo = QComboBox()
+    combo.addItem("Automatico", None)
+    for minutes in allowed_intervals(item.kind, item.timeframe):
+        combo.addItem(f"Ogni {format_interval(minutes)}", minutes)
+    combo.setCurrentIndex(max(0, combo.findData(item.interval_min)))
+    auto = (
+        "a ogni chiusura di candela"
+        if item.kind is SourceKind.CCXT
+        else "a ogni chiusura di candela, e comunque almeno ogni 5 minuti"
+    )
+    limit = ""
+    if item.kind is SourceKind.YFINANCE:
+        limit = "Yahoo: minimo 2 minuti (limite di richieste). "
+    combo.setToolTip(
+        f"Automatico: {auto}. {limit}Gli intervalli proposti non superano la durata della "
+        "candela e la dividono esattamente, così nessuna chiusura viene saltata."
+    )
+    return combo
 
 
 def suggested_size(signal: LiveSignal, money: MoneyParams) -> tuple[float, float]:
@@ -93,6 +136,7 @@ class LivePanel(QWidget):
         self._running_keys: set[str] = set()
         self._workers: set[Worker] = set()
         self._running = False
+        self._row_keys: list[str] = []  # mercati a cui corrispondono i selettori d'intervallo
 
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
@@ -218,19 +262,51 @@ class LivePanel(QWidget):
             logger.warning("Salvataggio watchlist non riuscito: %s", exc)
 
     def _refresh_watchlist(self) -> None:
-        self.watch_table.setRowCount(len(self.watchlist.items))
-        for row, item in enumerate(self.watchlist.items):
+        """Aggiorna i testi; i selettori d'intervallo si ricreano solo se cambiano i mercati
+        (ricrearli a ogni aggiornamento chiuderebbe un menu a tendina aperto)."""
+        items = self.watchlist.items
+        if self._row_keys != [i.key for i in items]:
+            self._rebuild_interval_combos()
+        for row, item in enumerate(items):
             candle, price, state = self._state.get(item.key, ("—", "—", "In attesa"))
             due = self._due.get(item.key)
-            values = (
-                item.label,
-                candle,
-                price,
-                _local(due, "%H:%M:%S") if (due is not None and self._running) else "—",
-                state,
-            )
-            for col, text in enumerate(values):
+            values = {
+                0: item.label,
+                2: candle,
+                3: price,
+                4: _local(due, "%H:%M:%S") if (due is not None and self._running) else "—",
+                5: state,
+            }
+            for col, text in values.items():
                 self.watch_table.setItem(row, col, QTableWidgetItem(text))
+
+    def _rebuild_interval_combos(self) -> None:
+        items = self.watchlist.items
+        self.watch_table.setRowCount(len(items))
+        for row, item in enumerate(items):
+            combo = interval_combo(item)
+            combo.currentIndexChanged.connect(
+                lambda _i, key=item.key, c=combo: self._on_interval_changed(key, c.currentData())
+            )
+            self.watch_table.setCellWidget(row, INTERVAL_COL, combo)
+        self._row_keys = [i.key for i in items]
+
+    def _on_interval_changed(self, key: str, minutes: Optional[int]) -> None:
+        item = next((i for i in self.watchlist.items if i.key == key), None)
+        if item is None or item.interval_min == minutes:
+            return
+        try:
+            updated = replace(item, interval_min=minutes)
+        except ValueError as exc:  # non dovrebbe accadere: le scelte sono già filtrate
+            QMessageBox.warning(self, "Watchlist", str(exc))
+            return
+        self.watchlist.update(updated)
+        self._save_watchlist()
+        if self._running and key not in self._running_keys:
+            self._due[key] = next_due(updated, pd.Timestamp.now(tz="UTC"))
+        label = "automatico" if minutes is None else f"ogni {format_interval(minutes)}"
+        self.status_message.emit(f"{updated.label}: controllo {label}")
+        self._refresh_watchlist()
 
     # ----------------------------------------------------------- monitoraggio
     @property
@@ -292,10 +368,7 @@ class LivePanel(QWidget):
         def fail(message: str) -> None:
             self._finish(worker, item)
             now = pd.Timestamp.now(tz="UTC")
-            self._due[item.key] = max(
-                next_check_time(item.timeframe, now, aligned=item.kind is SourceKind.CCXT),
-                now + ERROR_RETRY,
-            )
+            self._due[item.key] = max(next_due(item, now), now + ERROR_RETRY)
             self._set_state(item, state=f"Errore: {message}")
 
         worker.signals.finished.connect(done)
@@ -317,9 +390,7 @@ class LivePanel(QWidget):
     def _on_result(self, result: ScanResult) -> None:
         item = result.item
         now = pd.Timestamp.now(tz="UTC")
-        self._due[item.key] = next_check_time(
-            item.timeframe, now, aligned=item.kind is SourceKind.CCXT
-        )
+        self._due[item.key] = next_due(item, now)
         state = "Nessun segnale"
         if result.setup is not None:
             signal = LiveSignal.from_setup(item, result.setup, now)
@@ -342,6 +413,8 @@ class LivePanel(QWidget):
     def _refresh_signals(self) -> None:
         signals = list(reversed(self.history.signals))  # più recenti in alto
         money = self._money_provider()
+        palette = current_palette()
+        up, down = QColor(palette.up), QColor(palette.down)
         self.signal_table.setRowCount(len(signals))
         for row, sig in enumerate(signals):
             qty, risk_amount = suggested_size(sig, money)
@@ -362,7 +435,7 @@ class LivePanel(QWidget):
             for col, text in enumerate(values):
                 cell = QTableWidgetItem(text)
                 if col == 3:
-                    cell.setForeground(_UP if long else _DOWN)
+                    cell.setForeground(up if long else down)
                 self.signal_table.setItem(row, col, cell)
 
     def refresh_sizes(self) -> None:
