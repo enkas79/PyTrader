@@ -42,6 +42,7 @@ from pytrader.analysis import LevelParams
 from pytrader.backtest import BacktestParams, TradeOutcome, TradeResult
 from pytrader.gui.chart import ChartWidget
 from pytrader.gui.dialogs import HelpDialog
+from pytrader.gui.symbol_completer import SearchJob, SymbolSearchController
 from pytrader.gui.workers import Worker
 from pytrader.models import Direction
 from pytrader.services import (
@@ -49,6 +50,7 @@ from pytrader.services import (
     DataRequest,
     LoadedData,
     SourceKind,
+    SymbolSearchService,
     export_json,
     load_data,
     run_analysis,
@@ -124,6 +126,7 @@ class MainWindow(QMainWindow):
         self._data: Optional[LoadedData] = None
         self._bundle: Optional[AnalysisBundle] = None
         self._table_trades: list[TradeResult] = []
+        self._symbol_service = SymbolSearchService()
 
         self._build_menu()
         self._build_ui()
@@ -217,6 +220,10 @@ class MainWindow(QMainWindow):
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         self.exchange_edit = QLineEdit("binance")
         self.symbol_edit = QLineEdit("BTC/USDT")
+        self.symbol_edit.setClearButtonEnabled(True)
+        self.symbol_search = SymbolSearchController(self.symbol_edit, self._symbol_job)
+        self.symbol_search.status.connect(self.statusBar().showMessage)
+        self.exchange_edit.editingFinished.connect(self.symbol_search.clear)
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItems(TIMEFRAMES)
         self.timeframe_combo.setCurrentText("1h")
@@ -343,7 +350,20 @@ class MainWindow(QMainWindow):
         if message:
             self.statusBar().showMessage(message)
 
+    def _symbol_job(self, query: str) -> Optional[SearchJob]:
+        """Eseguito nel thread GUI: legge sorgente/exchange e prepara il job per il worker."""
+        kind = self.source_combo.currentData()
+        if kind is SourceKind.CSV or not query:
+            return None
+        if kind is SourceKind.YFINANCE and len(query) < 2:
+            return None
+        exchange = self.exchange_edit.text().strip() or "binance"
+        service = self._symbol_service
+        return lambda: service.search(kind, query, exchange)
+
     def _on_source_changed(self) -> None:
+        if hasattr(self, "symbol_search"):
+            self.symbol_search.clear()
         kind = self.source_combo.currentData()
         is_csv = kind is SourceKind.CSV
         for widget in (self._csv_row,):
@@ -351,6 +371,11 @@ class MainWindow(QMainWindow):
         self._source_form.setRowVisible(self.exchange_edit, kind is SourceKind.CCXT)
         for widget in (self.symbol_edit, self.timeframe_combo, self.limit_spin):
             self._source_form.setRowVisible(widget, not is_csv)
+        placeholder = {
+            SourceKind.YFINANCE: "Nome o ticker (es. Apple, Vanguard, Eni)",
+            SourceKind.CCXT: "Coppia o valuta (es. BTC, ETH/USDT)",
+        }.get(kind, "")
+        self.symbol_edit.setPlaceholderText(placeholder)
         if kind is SourceKind.YFINANCE and "/" in self.symbol_edit.text():
             self.symbol_edit.setText("AAPL")
         elif kind is SourceKind.CCXT and "/" not in self.symbol_edit.text():

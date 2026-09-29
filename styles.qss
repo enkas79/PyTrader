@@ -202,3 +202,19 @@ QToolTip {
     border: 1px solid #353b48;
     padding: 4px 8px;
 }
+
+/* Lista suggerimenti ticker */
+QListView#symbolPopup {
+    background-color: #232730;
+    border: 1px solid #353b48;
+    padding: 4px;
+    outline: none;
+}
+QListView#symbolPopup::item {
+    padding: 8px;
+    border-radius: 4px;
+}
+QListView#symbolPopup::item:selected, QListView#symbolPopup::item:hover {
+    background-color: #2f6fd6;
+    color: #ffffff;
+}
