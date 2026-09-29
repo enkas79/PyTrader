@@ -82,3 +82,22 @@ def test_ricerca_disattivata_per_csv(qapp: QApplication) -> None:
     window.source_combo.setCurrentIndex(window.source_combo.findData(SourceKind.CSV))
     assert window._symbol_job("apple") is None
     window.close()
+
+
+def test_capitale_ricalcola_importi(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow, fmt_money
+
+    window = MainWindow()
+    frame, report = validate_ohlcv(random_walk)
+    window._data = LoadedData(DataRequest(kind=SourceKind.CSV), frame, report)
+    window._on_analyzed(run_analysis(frame))
+    assert window._money is not None
+    first = window._money.final_equity
+    window.capital_spin.setValue(window.capital_spin.value() * 2)
+    assert window._money.params.initial_capital == 20_000
+    assert window.metric_labels["final_equity"].text() == fmt_money(window._money.final_equity)
+    assert window._money.final_equity != first
+    assert window.table.horizontalHeaderItem(13).text() == "P&L"
+    assert fmt_money(12345.678, signed=True) == "+12.345,68"
+    window.close()

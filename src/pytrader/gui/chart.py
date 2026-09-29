@@ -26,6 +26,11 @@ TARGET = QColor("#26a69a")
 SETUP_SPAN = 15  # candele su cui disegnare i livelli di un setup
 
 
+def _num(value: float) -> str:
+    """Numero compatto con virgola decimale."""
+    return f"{value:.6g}".replace(".", ",")
+
+
 class CandlestickItem(pg.GraphicsObject):
     """Candele pre-renderizzate in un ``QPicture`` (x = posizione della candela)."""
 
@@ -152,7 +157,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 pen=pg.mkPen(LEVEL_EDGE),
             )
             region.setZValue(-10)
-            region.setToolTip(f"Livello {lv.price:.6g} — tocchi: {lv.touches}")
+            region.setToolTip(f"Livello {_num(lv.price)} — tocchi: {lv.touches}")
             self.price_plot.addItem(region)
             self._overlay.append(region)
 
@@ -192,7 +197,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self.price_plot.addItem(line)
             self._setup_items.append(line)
             if highlight:
-                text = pg.TextItem(f"{label} {price:.6g}", color=color, anchor=(0, 0.5))
+                text = pg.TextItem(f"{label} {_num(price)}", color=color, anchor=(0, 0.5))
                 text.setPos(x1, price)
                 self.price_plot.addItem(text)
                 self._setup_items.append(text)

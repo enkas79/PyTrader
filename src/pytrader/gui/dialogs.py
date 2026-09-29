@@ -29,13 +29,24 @@ resistenza), entro la prossimità × ATR.</li>
 di buffer × ATR. <b>TP</b> sul livello strutturale successivo: se l'R:R è inferiore al minimo
 il setup viene scartato.</li>
 </ul>
-<h3>3. Leggere i risultati</h3>
+<h3>3. Capitale e rischio</h3>
+<ul>
+<li><b>Capitale</b>: somma iniziale, nella valuta in cui è quotato lo strumento.</li>
+<li><b>Rischio/trade</b>: percentuale del capitale persa se scatta lo stop loss. La quantità
+è calcolata come <i>capitale × rischio% / distanza entry-stop</i>.</li>
+<li><b>Leva massima</b>: il controvalore della posizione non supera capitale × leva. Con 1×
+e stop molto vicini la quantità viene ridotta (simbolo ⚠) e si rischia meno del previsto.</li>
+<li><b>Reinvesti i profitti</b>: il rischio si calcola sul capitale corrente anziché su quello
+iniziale.</li>
+</ul>
+<p>Modificando questi valori tabella e metriche si aggiornano subito, senza rifare l'analisi.</p>
+<h3>4. Leggere i risultati</h3>
 <p>La tabella <b>Setup</b> elenca tutti i segnali con esito simulato (win/loss/open/pending).
 Seleziona una riga per centrare il grafico. La scheda <b>Backtest</b> riporta win rate,
 expectancy in R, profit factor e drawdown massimo.</p>
 <p><b>Attenzione</b>: i risultati passati non garantiscono quelli futuri. Valuta sempre
 l'expectancy su un campione ampio prima di usare un setup.</p>
-<h3>4. Esportazione</h3>
+<h3>5. Esportazione</h3>
 <p><b>File → Esporta JSON</b> salva setup, esiti, livelli correnti e metriche.</p>
 """
 

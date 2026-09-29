@@ -7,5 +7,16 @@ from pytrader.backtest.engine import (
     TradeOutcome,
     TradeResult,
 )
+from pytrader.backtest.money import MoneyParams, MoneyResult, PositionPlan, simulate_money
 
-__all__ = ["BacktestParams", "BacktestResult", "Backtester", "TradeOutcome", "TradeResult"]
+__all__ = [
+    "MoneyParams",
+    "MoneyResult",
+    "PositionPlan",
+    "simulate_money",
+    "BacktestParams",
+    "BacktestResult",
+    "Backtester",
+    "TradeOutcome",
+    "TradeResult",
+]
