@@ -34,6 +34,10 @@ take profit, verificandoli con un backtest a barre.
 - **GUI**: grafico interattivo pyqtgraph con fasce S/R e livelli dei setup, tabella dei
   setup, export JSON, tema scuro/chiaro/di sistema, guida integrata, verifica aggiornamenti
   da GitHub Releases.
+- **Layout**: barra degli strumenti; barra laterale con sorgente, riepilogo impostazioni e
+  metriche del backtest, senza scorrimento da 1080p (anche con zoom 125%); parametri e capitale
+  in un pannello agganciabile o staccabile; colonne delle tabelle selezionabili; disposizione
+  ricordata tra un avvio e l'altro (`~/.pytrader/ui.ini`).
 
 ### Nessun look-ahead
 

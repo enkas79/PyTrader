@@ -51,7 +51,7 @@ QGroupBox {
     border: 1px solid @border_soft;
     border-radius: 8px;
     margin-top: 16px;
-    padding: 16px 12px 12px 12px;
+    padding: 12px 8px 8px 8px;
     font-weight: 600;
 }
 QGroupBox::title {
@@ -176,9 +176,88 @@ QHeaderView::section {
 }
 
 QLabel#metricValue {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     background-color: transparent;
+}
+QLabel#metricValue[tone="up"] {
+    color: @up;
+}
+QLabel#metricValue[tone="down"] {
+    color: @down;
+}
+QLabel#metricCaption {
+    color: @text_muted;
+    font-size: 12px;
+    font-weight: 400;
+    background-color: transparent;
+}
+QLabel#inlineLabel {
+    color: @text_label;
+    background-color: transparent;
+    font-weight: 400;
+}
+QFrame#metricCard {
+    background-color: @window;
+    border: 1px solid @border_soft;
+    border-radius: 4px;
+}
+QLabel#paramsSummary {
+    color: @text_label;
+    background-color: transparent;
+    font-weight: 400;
+}
+QLabel#paramsSummary:hover {
+    color: @focus;
+}
+QToolBar {
+    background-color: @menubar;
+    border: none;
+    border-bottom: 1px solid @separator;
+    padding: 0 8px 4px 8px;
+    spacing: 4px;
+}
+QToolBar::separator {
+    background-color: @border;
+    width: 1px;
+    margin: 4px 8px;
+}
+QToolButton {
+    background-color: transparent;
+    color: @text;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+QToolButton:hover {
+    background-color: @secondary;
+    border-color: @border;
+}
+QToolButton:checked {
+    background-color: @secondary_hover;
+    border-color: @focus;
+}
+QToolButton:disabled {
+    color: @disabled_text;
+}
+QToolButton[attention="true"], QPushButton[attention="true"] {
+    background-color: @accent;
+    color: @accent_text;
+    border: 2px solid @focus;
+}
+
+QDockWidget {
+    color: @text_muted;
+    font-weight: 600;
+}
+QDockWidget::title {
+    background-color: @surface;
+    border-bottom: 1px solid @border_soft;
+    padding: 8px;
+}
+#paramsPanel, #paramsPanel QScrollArea {
+    background-color: @window;
 }
 QLabel#hint {
     color: @text_muted;

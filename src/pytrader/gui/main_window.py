@@ -1,4 +1,5 @@
-"""Finestra principale: pannello sorgente/parametri, grafico, tabelle risultati e menu."""
+"""Finestra principale: barra laterale (sorgente, capitale, riepilogo parametri, metriche),
+grafico, tabelle, pannello parametri staccabile, barra degli strumenti e menu."""
 
 from __future__ import annotations
 
@@ -21,13 +22,13 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
+    QDockWidget,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -40,17 +41,16 @@ from PyQt6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QSplitter,
     QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from pytrader.analysis import LevelParams
 from pytrader.backtest import (
     BacktestParams,
     MoneyParams,
@@ -66,9 +66,12 @@ from pytrader.gui.dialogs import HelpDialog
 from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
 from pytrader.gui.icons import app_icon
 from pytrader.gui.live_panel import LivePanel
+from pytrader.gui.params_panel import ParamsPanel, money_summary
 from pytrader.gui.symbol_completer import SearchJob, SymbolSearchController
 from pytrader.gui.theme import current_palette
+from pytrader.gui.ui_state import STATE_VERSION, UiState
 from pytrader.gui.walkforward_dialog import WalkForwardDialog
+from pytrader.gui.widgets import ClickableLabel, ColumnChooser, MetricCard, dspin, set_tone, spin
 from pytrader.gui.workers import Worker
 from pytrader.live import LiveSignal, WatchItem
 from pytrader.models import Direction
@@ -83,7 +86,7 @@ from pytrader.services import (
     run_analysis,
 )
 from pytrader.settings import AppSettings, ThemeMode
-from pytrader.signals import SignalParams, TargetMode
+from pytrader.signals import SignalParams
 from pytrader.updater import (
     ReleaseInfo,
     UpdateError,
@@ -114,6 +117,19 @@ TABLE_COLUMNS = (
     "Rischio",
     "P&L",
 )
+DEFAULT_HIDDEN_COLUMNS = ("Livello", "Target")  # già leggibili sul grafico
+METRICS = (  # chiave, didascalia: griglia 2 × 5 nella barra laterale
+    ("trades", "Trade chiusi"),
+    ("win_rate", "Win rate"),
+    ("expectancy_r", "Expectancy (R)"),
+    ("total_r", "Totale (R)"),
+    ("profit_factor", "Profit factor"),
+    ("max_drawdown_r", "Max drawdown (R)"),
+    ("final_equity", "Capitale finale"),
+    ("net_profit", "Profitto netto"),
+    ("return_pct", "Rendimento"),
+    ("max_drawdown_money", "Max drawdown"),
+)
 OUTCOME_LABELS = {
     TradeOutcome.WIN: "Vinto",
     TradeOutcome.LOSS: "Perso",
@@ -121,24 +137,6 @@ OUTCOME_LABELS = {
     TradeOutcome.PENDING: "In attesa",
     TradeOutcome.SKIPPED: "Saltato",
 }
-
-
-def _spin(lo: int, hi: int, value: int) -> QSpinBox:
-    box = QSpinBox()
-    box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)  # rotella/frecce tastiera
-    box.setRange(lo, hi)
-    box.setValue(value)
-    return box
-
-
-def _dspin(lo: float, hi: float, value: float, step: float, decimals: int = 2) -> QDoubleSpinBox:
-    box = QDoubleSpinBox()
-    box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-    box.setRange(lo, hi)
-    box.setDecimals(decimals)
-    box.setSingleStep(step)
-    box.setValue(value)
-    return box
 
 
 class MainWindow(QMainWindow):
@@ -157,11 +155,21 @@ class MainWindow(QMainWindow):
         self._money: Optional[MoneyResult] = None
         self._symbol_service = SymbolSearchService()
         self._settings = AppSettings.load()
+        self._ui = UiState()
         self._wf_dialog: Optional[WalkForwardDialog] = None
+        self._analyzed: Optional[tuple[SignalParams, float]] = None  # parametri dell'analisi
+        self.params_stale = False  # analisi mostrata con parametri diversi da quelli correnti
 
-        self._build_menu()
+        self._build_actions()
         self._build_ui()
+        self._build_params_dock()
+        self._build_menu()
+        self._build_toolbar()
         self._build_tray()
+        self._capture_default_layout()
+        self._restore_ui_state()
+        self._on_params_changed()
+        self._update_money()
         self.statusBar().showMessage("Pronto")
         hints = QGuiApplication.styleHints()
         if hasattr(hints, "colorSchemeChanged"):  # Qt >= 6.5: segue il tema del sistema
@@ -173,6 +181,80 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1500, lambda: self.check_updates(manual=False))
 
     # ------------------------------------------------------------------ UI
+    def _build_actions(self) -> None:
+        """Azioni condivise da menu e barra degli strumenti."""
+        self.load_act = QAction("Carica dati", self)
+        self.load_act.setShortcut(QKeySequence("Ctrl+L"))
+        self.load_act.setToolTip("Scarica o legge la serie dalla sorgente selezionata (Ctrl+L)")
+        self.load_act.triggered.connect(self._load)
+        self.analyze_act = QAction("Analizza", self)
+        self.analyze_act.setShortcut(QKeySequence("F5"))
+        self.analyze_act.setToolTip("Ricalcola livelli, setup e backtest (F5)")
+        self.analyze_act.setEnabled(False)
+        self.analyze_act.triggered.connect(self._analyze)
+        self.wf_act = QAction("Walk-forward…", self)
+        self.wf_act.setToolTip("Ottimizzazione dei parametri con verifica fuori campione")
+        self.wf_act.setEnabled(False)
+        self.wf_act.triggered.connect(self._open_walk_forward)
+
+    def _build_params_dock(self) -> None:
+        self.params_panel = ParamsPanel()
+        self.params_panel.changed.connect(self._on_params_changed)
+        self.params_panel.analyze_requested.connect(self._analyze)
+        analysis_box = QGroupBox("Analisi")
+        analysis_layout = QVBoxLayout(analysis_box)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
+        analysis_layout.addWidget(self.params_panel)
+        container = QWidget()
+        container.setObjectName("paramsPanel")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(12, 8, 12, 12)
+        container_layout.setSpacing(8)
+        container_layout.addWidget(analysis_box)
+        container_layout.addWidget(self._money_box)
+        container_layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidget(container)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        dock = QDockWidget("Parametri e rischio", self)
+        dock.setObjectName("paramsDock")  # necessario per saveState/restoreState
+        dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        dock.setWidget(scroll)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        dock.hide()  # di default chiuso: si apre con Ctrl+P, dalla barra o dal riepilogo
+        self.params_dock = dock
+        self.params_act = dock.toggleViewAction()
+        self.params_act.setText("Parametri")
+        self.params_act.setShortcut(QKeySequence("Ctrl+P"))
+        self.params_act.setToolTip(
+            "Mostra/nasconde il pannello dei parametri: agganciabile ai lati o staccabile come "
+            "finestra (Ctrl+P)"
+        )
+
+    def _build_toolbar(self) -> None:
+        bar = QToolBar("Barra degli strumenti", self)
+        bar.setObjectName("mainToolbar")
+        bar.setMovable(False)
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        bar.addAction(self.load_act)
+        bar.addAction(self.analyze_act)
+        bar.addSeparator()
+        bar.addAction(self.params_act)
+        bar.addAction(self.wf_act)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
+        self.toolbar = bar
+        toggle = bar.toggleViewAction()
+        toggle.setText("Barra degli strumenti")
+        self._view_menu.insertAction(self._view_menu.actions()[0], toggle)
+
+    def show_params(self) -> None:
+        self.params_dock.show()
+        self.params_dock.raise_()
+        self.params_panel.atr_spin.setFocus()
+
     def _build_menu(self) -> None:
         bar = self.menuBar()
         file_menu = bar.addMenu("&File")
@@ -191,6 +273,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_act)
 
         view_menu = bar.addMenu("&Visualizza")
+        self._view_menu = view_menu
+        view_menu.addAction(self.params_act)
+        reset_act = QAction("Ripristina disposizione", self)
+        reset_act.triggered.connect(self.reset_layout)
+        view_menu.addAction(reset_act)
+        view_menu.addSeparator()
         theme_menu = view_menu.addMenu("Tema")
         self._theme_group = QActionGroup(self)
         self._theme_group.setExclusive(True)
@@ -208,9 +296,8 @@ class MainWindow(QMainWindow):
             self.theme_actions[mode] = act
 
         tools_menu = bar.addMenu("&Strumenti")
-        self.wf_act = QAction("Ottimizzazione walk-forward…", self)
-        self.wf_act.setEnabled(False)
-        self.wf_act.triggered.connect(self._open_walk_forward)
+        tools_menu.addActions([self.load_act, self.analyze_act])
+        tools_menu.addSeparator()
         tools_menu.addAction(self.wf_act)
 
         help_menu = bar.addMenu("&Aiuto")
@@ -229,15 +316,19 @@ class MainWindow(QMainWindow):
         side = QWidget()
         side.setObjectName("sidePanel")
         side_layout = QVBoxLayout(side)
-        side_layout.setContentsMargins(16, 16, 16, 16)
-        side_layout.setSpacing(16)
+        side_layout.setContentsMargins(12, 4, 12, 8)
+        side_layout.setSpacing(8)
         side_layout.addWidget(self._build_source_box())
-        side_layout.addWidget(self._build_money_box())
-        side_layout.addWidget(self._build_params_box())
+        self._money_box = self._build_money_box()  # ospitato nel pannello staccabile
+        side_layout.addWidget(self._build_params_summary())
+        side_layout.addWidget(self._build_metrics_box())
         side_layout.addStretch(1)
+        # Scorrimento solo come riserva per schermi piccoli (a 1080p non serve)
         scroll = QScrollArea()
         scroll.setWidget(side)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setMinimumWidth(300)
         scroll.setMaximumWidth(360)
 
@@ -253,8 +344,9 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
+        self.setup_columns = ColumnChooser(self.table, TABLE_COLUMNS)
+        self.setup_columns.on_change = lambda hidden: self._ui.set_names("columns/setup", hidden)
         self.tabs.addTab(self.table, "Setup")
-        self.tabs.addTab(self._build_metrics_tab(), "Backtest")
         self.report_text = QPlainTextEdit()
         self.report_text.setReadOnly(True)
         self.tabs.addTab(self.report_text, "Dati")
@@ -269,13 +361,14 @@ class MainWindow(QMainWindow):
         right.addWidget(self.chart)
         right.addWidget(self.tabs)
         right.setStretchFactor(0, 3)
-        right.setStretchFactor(1, 1)
+        right.setStretchFactor(1, 2)
 
         main = QSplitter(Qt.Orientation.Horizontal)
         main.addWidget(scroll)
         main.addWidget(right)
         main.setStretchFactor(1, 1)
         self.setCentralWidget(main)
+        self.splitters = {"main": main, "right": right, "live": self.live.splitter}
 
     def _build_source_box(self) -> QGroupBox:
         box = QGroupBox("Sorgente dati")
@@ -295,8 +388,19 @@ class MainWindow(QMainWindow):
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItems(TIMEFRAMES)
         self.timeframe_combo.setCurrentText("1h")
-        self.limit_spin = _spin(100, 50_000, 1500)
+        self.limit_spin = spin(100, 50_000, 1500)
         self.limit_spin.setSingleStep(100)
+        self.limit_spin.setToolTip("Numero di candele da scaricare")
+        tf_row = QWidget()  # timeframe e candele sulla stessa riga: barra laterale più bassa
+        tf_layout = QHBoxLayout(tf_row)
+        tf_layout.setContentsMargins(0, 0, 0, 0)
+        tf_layout.setSpacing(8)
+        tf_layout.addWidget(self.timeframe_combo, 1)
+        candles_label = QLabel("Candele")
+        candles_label.setObjectName("inlineLabel")
+        tf_layout.addWidget(candles_label)
+        tf_layout.addWidget(self.limit_spin, 1)
+        self._tf_row = tf_row
         csv_row = QWidget()
         csv_layout = QHBoxLayout(csv_row)
         csv_layout.setContentsMargins(0, 0, 0, 0)
@@ -316,8 +420,7 @@ class MainWindow(QMainWindow):
         form.addRow("File", csv_row)
         form.addRow("Exchange", self.exchange_edit)
         form.addRow("Simbolo", self.symbol_edit)
-        form.addRow("Timeframe", self.timeframe_combo)
-        form.addRow("Candele", self.limit_spin)
+        form.addRow("Timeframe", tf_row)
         form.addRow(self.load_button)
         self._source_form = form
         self._csv_row = csv_row
@@ -325,19 +428,20 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_money_box(self) -> QGroupBox:
+        """Capitale e rischio: nel pannello staccabile, sotto i parametri di analisi."""
         box = QGroupBox("Capitale e rischio")
         form = QFormLayout(box)
         form.setSpacing(8)
         d = MoneyParams()
-        self.capital_spin = _dspin(1.0, 1e12, d.initial_capital, 1000.0)
+        self.capital_spin = dspin(1.0, 1e12, d.initial_capital, 1000.0)
         self.capital_spin.setGroupSeparatorShown(True)
         self.capital_spin.setToolTip(
             "Capitale iniziale, nella valuta di quotazione dello strumento"
         )
-        self.risk_spin = _dspin(0.1, 100.0, d.risk_pct, 0.25)
+        self.risk_spin = dspin(0.1, 100.0, d.risk_pct, 0.25)
         self.risk_spin.setSuffix(" %")
         self.risk_spin.setToolTip("Quota del capitale persa se viene colpito lo stop loss")
-        self.leverage_spin = _dspin(0.1, 100.0, d.max_leverage, 0.5, decimals=1)
+        self.leverage_spin = dspin(0.1, 100.0, d.max_leverage, 0.5, decimals=1)
         self.leverage_spin.setSuffix(" ×")
         self.leverage_spin.setToolTip(
             "Nozionale massimo = capitale × leva. Con 1× non si usa leva: se lo stop è molto "
@@ -348,8 +452,8 @@ class MainWindow(QMainWindow):
         self.compound_check.setToolTip(
             "Rischio calcolato sul capitale corrente invece che su quello iniziale"
         )
-        for spin in (self.capital_spin, self.risk_spin, self.leverage_spin):
-            spin.valueChanged.connect(self._update_money)
+        for money_spin in (self.capital_spin, self.risk_spin, self.leverage_spin):
+            money_spin.valueChanged.connect(self._update_money)
         self.compound_check.toggled.connect(self._update_money)
         form.addRow("Capitale", self.capital_spin)
         form.addRow("Rischio/trade", self.risk_spin)
@@ -365,71 +469,38 @@ class MainWindow(QMainWindow):
             compounding=self.compound_check.isChecked(),
         )
 
-    def _build_params_box(self) -> QGroupBox:
-        box = QGroupBox("Parametri analisi")
-        form = QFormLayout(box)
-        form.setSpacing(8)
-        d = SignalParams()
-        self.atr_spin = _spin(2, 200, d.atr_period)
-        self.pivot_spin = _spin(1, 50, d.pivot_window)
-        self.tol_spin = _dspin(0.05, 5.0, d.levels.tolerance_atr, 0.05)
-        self.touches_spin = _spin(1, 20, d.levels.min_touches)
-        self.lookback_spin = _spin(50, 5000, d.levels.lookback)
-        self.prox_spin = _dspin(0.0, 5.0, d.proximity_atr, 0.05)
-        self.buffer_spin = _dspin(0.0, 10.0, d.sl_buffer_atr, 0.1)
-        self.rr_spin = _dspin(0.5, 10.0, d.min_rr, 0.25)
-        self.target_combo = QComboBox()
-        self.target_combo.addItem("Livello strutturale", TargetMode.STRUCTURAL)
-        self.target_combo.addItem("R:R fisso", TargetMode.FIXED_RR)
-        self.fee_spin = _dspin(0.0, 1.0, 0.0, 0.01, decimals=3)
-        self.fee_spin.setSuffix(" %")
-        self.analyze_button = QPushButton("Analizza")
-        self.analyze_button.setEnabled(False)
-        self.analyze_button.clicked.connect(self._analyze)
-
-        form.addRow("Periodo ATR", self.atr_spin)
-        form.addRow("Finestra pivot", self.pivot_spin)
-        form.addRow("Tolleranza (×ATR)", self.tol_spin)
-        form.addRow("Tocchi minimi", self.touches_spin)
-        form.addRow("Storico livelli", self.lookback_spin)
-        form.addRow("Prossimità (×ATR)", self.prox_spin)
-        form.addRow("Buffer SL (×ATR)", self.buffer_spin)
-        form.addRow("R:R minimo", self.rr_spin)
-        form.addRow("Target", self.target_combo)
-        form.addRow("Commissione/lato", self.fee_spin)
-        form.addRow(self.analyze_button)
+    def _build_params_summary(self) -> QGroupBox:
+        box = QGroupBox("Impostazioni")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(4)
+        self.money_summary = ClickableLabel()
+        self.money_summary.setObjectName("paramsSummary")
+        self.money_summary.setWordWrap(True)
+        self.money_summary.setToolTip("Clic per modificare capitale e rischio (Ctrl+P)")
+        self.money_summary.clicked.connect(self.show_params)
+        layout.addWidget(self.money_summary)
+        self.params_summary = ClickableLabel()
+        self.params_summary.setObjectName("paramsSummary")
+        self.params_summary.setWordWrap(True)
+        self.params_summary.setToolTip("Clic per modificare i parametri (Ctrl+P)")
+        self.params_summary.clicked.connect(self.show_params)
+        layout.addWidget(self.params_summary)
         return box
 
-    def _build_metrics_tab(self) -> QWidget:
-        widget = QWidget()
-        form = QFormLayout(widget)
-        form.setContentsMargins(16, 16, 16, 16)
-        form.setSpacing(8)
-        self.metric_labels: dict[str, QLabel] = {}
-        for key, label in (
-            ("trades", "Trade chiusi"),
-            ("win_rate", "Win rate"),
-            ("expectancy_r", "Expectancy (R)"),
-            ("total_r", "Totale (R)"),
-            ("profit_factor", "Profit factor"),
-            ("max_drawdown_r", "Max drawdown (R)"),
-            ("final_equity", "Capitale finale"),
-            ("net_profit", "Profitto netto"),
-            ("return_pct", "Rendimento"),
-            ("max_drawdown_money", "Max drawdown"),
-        ):
-            value = QLabel("—")
-            value.setObjectName("metricValue")
-            self.metric_labels[key] = value
-            form.addRow(label, value)
-        note = QLabel(
+    def _build_metrics_box(self) -> QGroupBox:
+        box = QGroupBox("Backtest")
+        box.setToolTip(
             "Simulazione a barre: una posizione alla volta; se SL e TP cadono nella stessa "
-            "candela si assume lo SL."
+            "candela si assume lo SL. Slippage non simulato."
         )
-        note.setWordWrap(True)
-        note.setObjectName("hint")
-        form.addRow(note)
-        return widget
+        grid = QGridLayout(box)
+        grid.setSpacing(4)
+        self.metric_labels: dict[str, QLabel] = {}
+        for pos, (key, caption) in enumerate(METRICS):
+            card = MetricCard(caption)
+            self.metric_labels[key] = card.value
+            grid.addWidget(card, pos // 2, pos % 2)
+        return box
 
     # ------------------------------------------------------------ helpers
     def _start(
@@ -458,9 +529,12 @@ class MainWindow(QMainWindow):
         self._pool.start(worker)
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
+        ready = not busy and self._data is not None
         self.load_button.setEnabled(not busy)
-        self.analyze_button.setEnabled(not busy and self._data is not None)
-        self.wf_act.setEnabled(not busy and self._data is not None)
+        self.load_act.setEnabled(not busy)
+        self.analyze_act.setEnabled(ready)
+        self.params_panel.analyze_button.setEnabled(ready)
+        self.wf_act.setEnabled(ready)
         if message:
             self.statusBar().showMessage(message)
 
@@ -483,7 +557,7 @@ class MainWindow(QMainWindow):
         for widget in (self._csv_row,):
             self._source_form.setRowVisible(widget, is_csv)
         self._source_form.setRowVisible(self.exchange_edit, kind is SourceKind.CCXT)
-        for widget in (self.symbol_edit, self.timeframe_combo, self.limit_spin):
+        for widget in (self.symbol_edit, self._tf_row):
             self._source_form.setRowVisible(widget, not is_csv)
         placeholder = {
             SourceKind.YFINANCE: "Nome o ticker (es. Apple, Vanguard, Eni)",
@@ -502,19 +576,32 @@ class MainWindow(QMainWindow):
             self.csv_edit.setText(path)
 
     def _signal_params(self) -> SignalParams:
-        return SignalParams(
-            atr_period=self.atr_spin.value(),
-            pivot_window=self.pivot_spin.value(),
-            proximity_atr=self.prox_spin.value(),
-            sl_buffer_atr=self.buffer_spin.value(),
-            min_rr=self.rr_spin.value(),
-            target_mode=self.target_combo.currentData(),
-            levels=LevelParams(
-                tolerance_atr=self.tol_spin.value(),
-                min_touches=self.touches_spin.value(),
-                lookback=self.lookback_spin.value(),
-            ),
+        return self.params_panel.params()
+
+    def _on_params_changed(self) -> None:
+        """Aggiorna il riepilogo e segnala se l'analisi mostrata usa parametri diversi."""
+        self.params_summary.setText(self.params_panel.summary())
+        try:
+            current = (self.params_panel.params(), self.params_panel.fee_rate())
+        except ValueError:
+            current = None
+        stale = self._analyzed is not None and current != self._analyzed
+        if stale == self.params_stale:
+            return
+        self.params_stale = stale
+        # Nessun avviso nella barra laterale (resterebbe senza spazio): si evidenzia l'azione
+        button = (
+            self.toolbar.widgetForAction(self.analyze_act) if hasattr(self, "toolbar") else None
         )
+        for widget in (button, self.params_panel.analyze_button):
+            if widget is not None:
+                widget.setProperty("attention", stale)
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+        tip = "Parametri modificati dopo l'ultima analisi: premi Analizza (F5)"
+        self.analyze_act.setToolTip(tip if stale else "Ricalcola livelli, setup e backtest (F5)")
+        if stale:
+            self.statusBar().showMessage(tip)
 
     # ------------------------------------------------------------ azioni
     def _load(self) -> None:
@@ -558,7 +645,9 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "Parametri", str(exc))
             return
-        bt_params = BacktestParams(fee_rate=self.fee_spin.value() / 100.0)
+        bt_params = BacktestParams(fee_rate=self.params_panel.fee_rate())
+        self._analyzed = (params, bt_params.fee_rate)
+        self._on_params_changed()
         self._set_busy(True, "Analisi in corso…")
         self._start(
             run_analysis,
@@ -590,6 +679,11 @@ class MainWindow(QMainWindow):
 
     def _update_money(self) -> None:
         """Ricalcola importi e metriche monetarie (operazione leggera, senza rianalisi)."""
+        if hasattr(self, "money_summary"):
+            try:
+                self.money_summary.setText(money_summary(self._money_params()))
+            except ValueError as exc:
+                self.money_summary.setText(str(exc))
         if hasattr(self, "live"):
             self.live.refresh_sizes()
         if self._bundle is None:
@@ -644,19 +738,26 @@ class MainWindow(QMainWindow):
 
     def _fill_metrics(self, bundle: AnalysisBundle, money: MoneyResult) -> None:
         m = bundle.backtest.summary()
-        self.metric_labels["trades"].setText(str(int(m["trades"])))
-        self.metric_labels["win_rate"].setText(it_num(f"{m['win_rate'] * 100:.1f}") + " %")
-        self.metric_labels["expectancy_r"].setText(it_num(f"{m['expectancy_r']:+.3f}"))
-        self.metric_labels["total_r"].setText(it_num(f"{m['total_r']:+.2f}"))
+        labels = self.metric_labels
+        labels["trades"].setText(str(int(m["trades"])))
+        labels["win_rate"].setText(it_num(f"{m['win_rate'] * 100:.1f}") + " %")
+        labels["expectancy_r"].setText(it_num(f"{m['expectancy_r']:+.3f}"))
+        labels["total_r"].setText(it_num(f"{m['total_r']:+.2f}"))
         pf = m["profit_factor"]
-        self.metric_labels["profit_factor"].setText("∞" if math.isinf(pf) else it_num(f"{pf:.2f}"))
-        self.metric_labels["max_drawdown_r"].setText(it_num(f"{m['max_drawdown_r']:.2f}"))
-        self.metric_labels["final_equity"].setText(fmt_money(money.final_equity))
-        self.metric_labels["net_profit"].setText(fmt_money(money.net_profit, signed=True))
-        self.metric_labels["return_pct"].setText(it_num(f"{money.return_pct:+.2f}") + " %")
-        self.metric_labels["max_drawdown_money"].setText(
-            f"{fmt_money(money.max_drawdown_amount)} ({it_num(f'{money.max_drawdown_pct:.2f}')} %)"
-        )
+        labels["profit_factor"].setText("∞" if math.isinf(pf) else it_num(f"{pf:.2f}"))
+        labels["max_drawdown_r"].setText(it_num(f"{m['max_drawdown_r']:.2f}"))
+        labels["final_equity"].setText(fmt_money(money.final_equity))
+        labels["net_profit"].setText(fmt_money(money.net_profit, signed=True))
+        labels["return_pct"].setText(it_num(f"{money.return_pct:+.2f}") + " %")
+        labels["max_drawdown_money"].setText(it_num(f"{money.max_drawdown_pct:.2f}") + " %")
+        labels["max_drawdown_money"].setToolTip(fmt_money(money.max_drawdown_amount))
+        for key, value in (
+            ("expectancy_r", m["expectancy_r"]),
+            ("total_r", m["total_r"]),
+            ("net_profit", money.net_profit),
+            ("return_pct", money.return_pct),
+        ):
+            set_tone(labels[key], "up" if value > 0 else "down" if value < 0 else "")
 
     def _on_row_selected(self) -> None:
         rows = self.table.selectionModel().selectedRows()
@@ -716,7 +817,7 @@ class MainWindow(QMainWindow):
         dialog = WalkForwardDialog(
             self._data.frame,
             params,
-            BacktestParams(fee_rate=self.fee_spin.value() / 100.0),
+            BacktestParams(fee_rate=self.params_panel.fee_rate()),
             self,
         )
         dialog.apply_requested.connect(self._apply_signal_params)
@@ -725,11 +826,7 @@ class MainWindow(QMainWindow):
 
     def _apply_signal_params(self, params: SignalParams) -> None:
         """Imposta nel pannello i parametri scelti dal walk-forward e rianalizza."""
-        self.prox_spin.setValue(params.proximity_atr)
-        self.buffer_spin.setValue(params.sl_buffer_atr)
-        self.rr_spin.setValue(params.min_rr)
-        self.tol_spin.setValue(params.levels.tolerance_atr)
-        self.pivot_spin.setValue(params.pivot_window)
+        self.params_panel.set_params(params)
         self.statusBar().showMessage("Parametri del walk-forward applicati")
         self._analyze()
 
@@ -905,7 +1002,52 @@ class MainWindow(QMainWindow):
         self._quitting = True
         self.close()
 
+    # ---------------------------------------------------- stato interfaccia
+    def _capture_default_layout(self) -> None:
+        """Disposizione iniziale, per 'Ripristina disposizione'."""
+        self._default_state = self.saveState(STATE_VERSION)
+        self._default_sizes = {"main": [330, 1070], "right": [520, 340], "live": [180, 260]}
+
+    def _restore_ui_state(self) -> None:
+        ui = self._ui
+        geometry = ui.bytes("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        state = ui.bytes("window/state")
+        if state is not None:
+            self.restoreState(state, STATE_VERSION)  # versione diversa: ignorato
+        for name, splitter in self.splitters.items():
+            saved = ui.bytes(f"splitter/{name}")
+            if saved is None or not splitter.restoreState(saved):
+                splitter.setSizes(self._default_sizes[name])
+        self.setup_columns.set_hidden(ui.names("columns/setup", list(DEFAULT_HIDDEN_COLUMNS)))
+        self.live.signal_columns.set_hidden(ui.names("columns/signals", []))
+
+    def _save_ui_state(self) -> None:
+        ui = self._ui
+        ui.set_bytes("window/geometry", self.saveGeometry())
+        ui.set_bytes("window/state", self.saveState(STATE_VERSION))
+        for name, splitter in self.splitters.items():
+            ui.set_bytes(f"splitter/{name}", splitter.saveState())
+        ui.set_names("columns/setup", self.setup_columns.hidden())
+        ui.set_names("columns/signals", self.live.signal_columns.hidden())
+        ui.sync()
+
+    def reset_layout(self) -> None:
+        """Pannelli, divisori e colonne tornano alla disposizione predefinita."""
+        self.restoreState(self._default_state, STATE_VERSION)
+        self.params_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.params_dock)
+        self.params_dock.hide()
+        self.toolbar.show()
+        for name, splitter in self.splitters.items():
+            splitter.setSizes(self._default_sizes[name])
+        self.setup_columns.set_hidden(DEFAULT_HIDDEN_COLUMNS)
+        self.live.signal_columns.set_hidden([])
+        self._save_ui_state()
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (API Qt)
+        self._save_ui_state()
         if self.live.is_running and self.tray is not None and not self._quitting:
             # Monitoraggio attivo: la finestra si nasconde e l'app resta nella tray
             event.ignore()
