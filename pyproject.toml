@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytrader"
+dynamic = ["version"]
+description = "Analisi tecnica OHLCV desktop (PyQt6): supporti/resistenze, pattern candlestick, setup con gestione del rischio"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "enkas79" }]
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "PyQt6>=6.5",
+    "pyqtgraph>=0.13.3",
+]
+
+[project.optional-dependencies]
+ccxt = ["ccxt>=4.0"]
+yfinance = ["yfinance>=0.2.40"]
+dev = ["pytest>=8", "ruff>=0.5", "pyinstaller>=6"]
+
+[project.gui-scripts]
+pytrader = "pytrader.gui.app:run"
+
+[tool.setuptools.dynamic]
+version = { file = "version.txt" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pytrader = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["UP007", "UP045"]
