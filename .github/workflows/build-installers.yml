@@ -66,7 +66,12 @@ jobs:
           src/main.py
       - name: Installer Windows (NSIS)
         if: runner.os == 'Windows'
-        run: makensis /DVERSION=${{ env.VERSION }} installer\pytrader.nsi
+        shell: pwsh
+        run: |
+          # NSIS non è nel PATH dei runner Windows: installazione esplicita
+          choco install nsis -y --no-progress
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=$env:VERSION installer\pytrader.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Archivio Linux
         if: runner.os == 'Linux'
         run: tar -czf dist/PyTrader-${VERSION}-linux.tar.gz -C dist PyTrader
