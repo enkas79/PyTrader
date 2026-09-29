@@ -107,3 +107,24 @@ def validate_ohlcv(
                 f"{len(report.gaps)} buchi temporali: indicatori e pattern li attraversano"
             )
     return df, report
+
+
+def drop_unclosed_candle(
+    frame: pd.DataFrame,
+    timeframe: Union[str, pd.Timedelta],
+    now: Optional[pd.Timestamp] = None,
+) -> tuple[pd.DataFrame, bool]:
+    """Rimuove l'ultima candela se non ancora chiusa (apertura + timeframe > ``now``).
+
+    Exchange e Yahoo restituiscono la candela in formazione: analizzarla produrrebbe
+    pattern che possono sparire prima della chiusura (repainting).
+    """
+    if frame.empty:
+        return frame, False
+    tf = parse_timeframe(timeframe) if isinstance(timeframe, str) else pd.Timedelta(timeframe)
+    current = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now)
+    if current.tzinfo is None:
+        current = current.tz_localize("UTC")
+    if frame.index[-1] + tf > current:
+        return frame.iloc[:-1], True
+    return frame, False

@@ -53,3 +53,36 @@ def test_csv_colonne_mancanti(tmp_path) -> None:
     path.write_text("date,open,close\n2024-01-01,1,2\n")
     with pytest.raises(DataSourceError):
         CsvDataSource(path).fetch()
+
+
+def test_esclude_candela_in_formazione() -> None:
+    from pytrader.data import drop_unclosed_candle
+
+    df = make_ohlcv([(10, 11, 9, 10.5)] * 4, freq="15min")  # 00:00 ... 00:45
+    last_open = df.index[-1]
+    # alle 00:50 la candela delle 00:45 è ancora aperta
+    out, dropped = drop_unclosed_candle(df, "15m", last_open + pd.Timedelta(minutes=5))
+    assert dropped and len(out) == 3
+    # alle 01:00 esatte è chiusa
+    out, dropped = drop_unclosed_candle(df, "15m", last_open + pd.Timedelta(minutes=15))
+    assert not dropped and len(out) == 4
+
+
+def test_load_data_remoto_esclude_candela_aperta(monkeypatch) -> None:
+    import pytrader.services as services
+    from pytrader.services import DataRequest, SourceKind, load_data
+
+    df = make_ohlcv([(10, 11, 9, 10.5)] * 5, freq="1h")
+    now = df.index[-1] + pd.Timedelta(minutes=20)
+
+    class FakeSource:
+        def fetch(self, symbol, timeframe, since=None, limit=None):
+            assert limit == 101  # una candela in più per compensare quella scartata
+            return df
+
+    monkeypatch.setattr(services, "make_source", lambda request: FakeSource())
+    loaded = load_data(
+        DataRequest(kind=SourceKind.CCXT, symbol="BTC/USDT", timeframe="1h", limit=100), now=now
+    )
+    assert len(loaded.frame) == 4
+    assert any("formazione" in w for w in loaded.report.warnings)

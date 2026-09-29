@@ -5,16 +5,16 @@ from __future__ import annotations
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 from PyQt6.QtCore import QLocale
 from PyQt6.QtWidgets import QApplication
 
+from pytrader.storage import app_data_dir
 from pytrader.version import APP_AUTHOR, APP_NAME, get_version, resource_path
 
 
 def _setup_logging() -> None:
-    log_dir = Path.home() / f".{APP_NAME.lower()}"
+    log_dir = app_data_dir()
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +47,8 @@ def run() -> int:
     app.setApplicationVersion(get_version())
     app.setOrganizationName(APP_AUTHOR)
     app.setStyle("Fusion")
+    # La chiusura della finestra non termina l'app se il monitoraggio live è nella tray
+    app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(load_stylesheet())
     window = MainWindow()
     window.show()

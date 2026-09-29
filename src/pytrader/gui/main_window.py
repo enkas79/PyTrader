@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PyQt6.QtCore import Qt, QThreadPool, QTimer, QUrl
-from PyQt6.QtGui import QAction, QColor, QDesktopServices, QKeySequence
+from PyQt6.QtGui import QAction, QCloseEvent, QColor, QDesktopServices, QKeySequence
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressDialog,
@@ -32,6 +34,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -51,8 +54,12 @@ from pytrader.backtest import (
 )
 from pytrader.gui.chart import ChartWidget
 from pytrader.gui.dialogs import HelpDialog
+from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
+from pytrader.gui.icons import app_icon
+from pytrader.gui.live_panel import LivePanel
 from pytrader.gui.symbol_completer import SearchJob, SymbolSearchController
 from pytrader.gui.workers import Worker
+from pytrader.live import LiveSignal, WatchItem
 from pytrader.models import Direction
 from pytrader.services import (
     AnalysisBundle,
@@ -104,30 +111,6 @@ OUTCOME_LABELS = {
 }
 
 
-def _it(text: str) -> str:
-    """Separatori italiani: 12,345.67 -> 12.345,67."""
-    return text.translate(str.maketrans({",": ".", ".": ","}))
-
-
-def fmt_price(value: Optional[float]) -> str:
-    if value is None or not math.isfinite(value):
-        return "—"
-    return _it(f"{value:,.{6 if abs(value) < 1 else 4 if abs(value) < 100 else 2}f}")
-
-
-def fmt_money(value: Optional[float], signed: bool = False) -> str:
-    if value is None or not math.isfinite(value):
-        return "—"
-    return _it(f"{value:+,.2f}" if signed else f"{value:,.2f}")
-
-
-def fmt_qty(value: float) -> str:
-    if value == 0:
-        return "—"
-    decimals = 2 if value >= 100 else 4 if value >= 1 else 6
-    return _it(f"{value:,.{decimals}f}")
-
-
 def _spin(lo: int, hi: int, value: int) -> QSpinBox:
     box = QSpinBox()
     box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)  # rotella/frecce tastiera
@@ -150,7 +133,10 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {get_version()}")
+        self.setWindowIcon(app_icon())
         self.resize(1400, 860)
+        self._quitting = False
+        self._tray_hint_shown = False
         self._pool = QThreadPool.globalInstance()
         self._workers: set[Worker] = set()
         self._data: Optional[LoadedData] = None
@@ -161,7 +147,11 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_ui()
+        self._build_tray()
         self.statusBar().showMessage("Pronto")
+        if self.live.watchlist.active and self.live.watchlist.items:
+            # Il monitoraggio era attivo alla chiusura precedente: riparte da solo
+            QTimer.singleShot(2000, self.live.start)
         # Verifica aggiornamenti silenziosa in background all'avvio
         QTimer.singleShot(1500, lambda: self.check_updates(manual=False))
 
@@ -178,7 +168,7 @@ class MainWindow(QMainWindow):
         self.export_act.triggered.connect(self._export_json)
         quit_act = QAction("Esci", self)
         quit_act.setShortcut(QKeySequence.StandardKey.Quit)
-        quit_act.triggered.connect(self.close)
+        quit_act.triggered.connect(self.quit_app)
         file_menu.addActions([open_act, self.export_act])
         file_menu.addSeparator()
         file_menu.addAction(quit_act)
@@ -228,6 +218,12 @@ class MainWindow(QMainWindow):
         self.report_text = QPlainTextEdit()
         self.report_text.setReadOnly(True)
         self.tabs.addTab(self.report_text, "Dati")
+        self.live = LivePanel(self._signal_params, self._money_params, self._current_watch_item)
+        self.live.status_message.connect(self.statusBar().showMessage)
+        self.live.new_signal.connect(self._on_live_signal)
+        self.live.open_requested.connect(self._open_watch_item)
+        self.live.running_changed.connect(self._on_live_running)
+        self.tabs.addTab(self.live, "Live")
 
         right = QSplitter(Qt.Orientation.Vertical)
         right.addWidget(self.chart)
@@ -268,7 +264,7 @@ class MainWindow(QMainWindow):
         self.csv_edit = QLineEdit()
         self.csv_edit.setPlaceholderText("Percorso file .csv")
         browse = QPushButton("…")
-        browse.setObjectName("secondaryButton")
+        browse.setObjectName("iconButton")
         browse.setFixedWidth(32)
         browse.clicked.connect(self._browse_csv)
         csv_layout.addWidget(self.csv_edit)
@@ -553,6 +549,8 @@ class MainWindow(QMainWindow):
 
     def _update_money(self) -> None:
         """Ricalcola importi e metriche monetarie (operazione leggera, senza rianalisi)."""
+        if hasattr(self, "live"):
+            self.live.refresh_sizes()
         if self._bundle is None:
             return
         try:
@@ -582,10 +580,10 @@ class MainWindow(QMainWindow):
                 fmt_price(s.entry) + (" *" if s.entry_is_estimate else ""),
                 fmt_price(s.stop_loss),
                 fmt_price(s.take_profit),
-                _it(f"1:{s.risk_reward:.2f}"),
+                it_num(f"1:{s.risk_reward:.2f}"),
                 "Strutturale" if s.target_source.value == "structural" else "R:R fisso",
                 OUTCOME_LABELS[t.outcome],
-                _it(f"{t.r_multiple:+.2f}") if t.r_multiple is not None else "—",
+                it_num(f"{t.r_multiple:+.2f}") if t.r_multiple is not None else "—",
                 fmt_qty(plan.quantity) + (" ⚠" if plan.capped else ""),
                 fmt_money(plan.risk_amount) if plan.quantity else "—",
                 fmt_money(plan.pnl, signed=True),
@@ -605,17 +603,17 @@ class MainWindow(QMainWindow):
     def _fill_metrics(self, bundle: AnalysisBundle, money: MoneyResult) -> None:
         m = bundle.backtest.summary()
         self.metric_labels["trades"].setText(str(int(m["trades"])))
-        self.metric_labels["win_rate"].setText(_it(f"{m['win_rate'] * 100:.1f}") + " %")
-        self.metric_labels["expectancy_r"].setText(_it(f"{m['expectancy_r']:+.3f}"))
-        self.metric_labels["total_r"].setText(_it(f"{m['total_r']:+.2f}"))
+        self.metric_labels["win_rate"].setText(it_num(f"{m['win_rate'] * 100:.1f}") + " %")
+        self.metric_labels["expectancy_r"].setText(it_num(f"{m['expectancy_r']:+.3f}"))
+        self.metric_labels["total_r"].setText(it_num(f"{m['total_r']:+.2f}"))
         pf = m["profit_factor"]
-        self.metric_labels["profit_factor"].setText("∞" if math.isinf(pf) else _it(f"{pf:.2f}"))
-        self.metric_labels["max_drawdown_r"].setText(_it(f"{m['max_drawdown_r']:.2f}"))
+        self.metric_labels["profit_factor"].setText("∞" if math.isinf(pf) else it_num(f"{pf:.2f}"))
+        self.metric_labels["max_drawdown_r"].setText(it_num(f"{m['max_drawdown_r']:.2f}"))
         self.metric_labels["final_equity"].setText(fmt_money(money.final_equity))
         self.metric_labels["net_profit"].setText(fmt_money(money.net_profit, signed=True))
-        self.metric_labels["return_pct"].setText(_it(f"{money.return_pct:+.2f}") + " %")
+        self.metric_labels["return_pct"].setText(it_num(f"{money.return_pct:+.2f}") + " %")
         self.metric_labels["max_drawdown_money"].setText(
-            f"{fmt_money(money.max_drawdown_amount)} ({_it(f'{money.max_drawdown_pct:.2f}')} %)"
+            f"{fmt_money(money.max_drawdown_amount)} ({it_num(f'{money.max_drawdown_pct:.2f}')} %)"
         )
 
     def _on_row_selected(self) -> None:
@@ -702,7 +700,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Aggiornamento", str(exc))
                 return
             if started:
-                self.close()
+                self.quit_app()
             else:
                 QMessageBox.information(
                     self,
@@ -723,3 +721,111 @@ class MainWindow(QMainWindow):
             on_error=on_error,
             on_progress=progress.setValue,
         )
+
+    # ------------------------------------------------------------------ live
+    def _current_watch_item(self) -> Optional[WatchItem]:
+        kind = self.source_combo.currentData()
+        if kind is SourceKind.CSV:
+            return None
+        exchange = self.exchange_edit.text().strip() or "binance"
+        return WatchItem(
+            kind=kind,
+            symbol=self.symbol_edit.text().strip(),
+            timeframe=self.timeframe_combo.currentText(),
+            exchange=exchange if kind is SourceKind.CCXT else "",
+        )
+
+    def _open_watch_item(self, item: WatchItem) -> None:
+        """Apre nel grafico il mercato di un segnale (doppio clic nello storico)."""
+        self.source_combo.setCurrentIndex(self.source_combo.findData(item.kind))
+        if item.exchange:
+            self.exchange_edit.setText(item.exchange)
+        self.symbol_edit.setText(item.symbol)
+        self.timeframe_combo.setCurrentText(item.timeframe)
+        self.tabs.setCurrentIndex(0)
+        self.show_window()
+        self._load()
+
+    def _on_live_signal(self, signal: LiveSignal) -> None:
+        direction = "ACQUISTO (long)" if signal.direction == "long" else "VENDITA (short)"
+        title = f"{direction} · {signal.item_label}"
+        body = (
+            f"{signal.pattern.replace('_', ' ').title()} sul livello {fmt_price(signal.level)}\n"
+            f"Entry ~{fmt_price(signal.entry)}  SL {fmt_price(signal.stop_loss)}  "
+            f"TP {fmt_price(signal.take_profit)}  (R:R {it_num(f'1:{signal.risk_reward:.2f}')})"
+        )
+        QApplication.beep()
+        self.statusBar().showMessage(f"Nuovo segnale: {title}")
+        if self.tray is not None:
+            self.tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, 20_000)
+        elif self.isHidden() or self.isMinimized():
+            self.show_window()
+
+    def _on_live_running(self, running: bool) -> None:
+        if self.tray is not None:
+            state = "monitoraggio attivo" if running else "monitoraggio fermo"
+            self.tray.setToolTip(f"{APP_NAME} — {state}")
+
+    # ------------------------------------------------------------ tray/chiusura
+    def _build_tray(self) -> None:
+        self.tray: Optional[QSystemTrayIcon] = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(app_icon(), self)
+        tray.setToolTip(APP_NAME)
+        menu = QMenu(self)
+        show_act = QAction("Mostra PyTrader", self)
+        show_act.triggered.connect(self.show_window)
+        live_act = QAction("Segnali live", self)
+        live_act.triggered.connect(self._show_live_tab)
+        quit_act = QAction("Esci", self)
+        quit_act.triggered.connect(self.quit_app)
+        menu.addActions([show_act, live_act])
+        menu.addSeparator()
+        menu.addAction(quit_act)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.messageClicked.connect(self._show_live_tab)
+        tray.show()
+        self.tray = tray
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self.show_window()
+
+    def show_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _show_live_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.live)
+        self.show_window()
+
+    def quit_app(self) -> None:
+        """Uscita definitiva (menu Esci, tray, installazione aggiornamento)."""
+        self._quitting = True
+        self.close()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (API Qt)
+        if self.live.is_running and self.tray is not None and not self._quitting:
+            # Monitoraggio attivo: la finestra si nasconde e l'app resta nella tray
+            event.ignore()
+            self.hide()
+            if not self._tray_hint_shown:
+                self._tray_hint_shown = True
+                self.tray.showMessage(
+                    APP_NAME,
+                    "Il monitoraggio continua in background. Usa il menu dell'icona per uscire.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    8_000,
+                )
+            return
+        self.live.shutdown()
+        if self.tray is not None:
+            self.tray.hide()
+        event.accept()
+        QApplication.quit()

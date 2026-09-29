@@ -86,7 +86,8 @@ def test_ricerca_disattivata_per_csv(qapp: QApplication) -> None:
 
 def test_capitale_ricalcola_importi(qapp: QApplication, random_walk: pd.DataFrame) -> None:
     from pytrader.data import validate_ohlcv
-    from pytrader.gui.main_window import MainWindow, fmt_money
+    from pytrader.gui.formatting import fmt_money
+    from pytrader.gui.main_window import MainWindow
 
     window = MainWindow()
     frame, report = validate_ohlcv(random_walk)
@@ -101,3 +102,54 @@ def test_capitale_ricalcola_importi(qapp: QApplication, random_walk: pd.DataFram
     assert window.table.horizontalHeaderItem(13).text() == "P&L"
     assert fmt_money(12345.678, signed=True) == "+12.345,68"
     window.close()
+
+
+def test_live_segnale_notificato_e_deduplicato(qapp: QApplication) -> None:
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.live import LiveScanner, ScanResult, WatchItem
+    from pytrader.signals import SignalParams
+    from tests.test_signals import _scenario
+
+    df = _scenario()
+    cut = df.iloc[: len(df) - 11]  # ultima candela = hammer sul supporto
+
+    def loader(request, now=None):
+        clean, report = validate_ohlcv(cut)
+        return LoadedData(request, clean, report)
+
+    window = MainWindow()
+    window._signal_params = lambda: SignalParams(pivot_window=3, min_rr=1.5)  # type: ignore
+    live = window.live
+    live._params_provider = window._signal_params
+    live.scanner = LiveScanner(loader)
+    item = WatchItem(SourceKind.CCXT, "BTC/USDT", "1h", "binance")
+    live.watchlist.add(item)
+
+    received = []
+    live.new_signal.connect(received.append)
+    result = live.scanner.scan(item, window._signal_params())
+    assert isinstance(result, ScanResult) and result.setup is not None
+    live._on_result(result)
+    live._on_result(result)  # stessa candela: nessuna seconda notifica
+    assert len(received) == 1
+    assert live.signal_table.rowCount() == 1
+    assert live.signal_table.item(0, 3).text() == "Long"
+    assert live.signal_table.item(0, 9).text() != "—"  # quantità suggerita dal capitale
+    assert "Segnale LONG" in live.watch_table.item(0, 4).text()
+    window.quit_app()
+
+
+def test_live_aggiungi_mercato_corrente_e_riapri(qapp: QApplication) -> None:
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.live import Watchlist
+
+    window = MainWindow()
+    window.source_combo.setCurrentIndex(window.source_combo.findData(SourceKind.CCXT))
+    window.symbol_edit.setText("ETH/USDT")
+    window.timeframe_combo.setCurrentText("4h")
+    window.live._add_current()
+    window.live._add_current()  # duplicato ignorato
+    assert [i.key for i in window.live.watchlist.items] == ["ccxt:binance:ETH/USDT:4h"]
+    assert Watchlist.load().items[0].symbol == "ETH/USDT"  # persistito su disco
+    window.quit_app()
