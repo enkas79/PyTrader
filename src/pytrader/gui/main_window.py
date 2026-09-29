@@ -14,6 +14,7 @@ from PyQt6.QtGui import QAction, QColor, QDesktopServices, QKeySequence
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -39,7 +40,15 @@ from PyQt6.QtWidgets import (
 )
 
 from pytrader.analysis import LevelParams
-from pytrader.backtest import BacktestParams, TradeOutcome, TradeResult
+from pytrader.backtest import (
+    BacktestParams,
+    MoneyParams,
+    MoneyResult,
+    PositionPlan,
+    TradeOutcome,
+    TradeResult,
+    simulate_money,
+)
 from pytrader.gui.chart import ChartWidget
 from pytrader.gui.dialogs import HelpDialog
 from pytrader.gui.symbol_completer import SearchJob, SymbolSearchController
@@ -82,6 +91,9 @@ TABLE_COLUMNS = (
     "Target",
     "Esito",
     "R",
+    "Quantità",
+    "Rischio",
+    "P&L",
 )
 OUTCOME_LABELS = {
     TradeOutcome.WIN: "Vinto",
@@ -92,10 +104,28 @@ OUTCOME_LABELS = {
 }
 
 
+def _it(text: str) -> str:
+    """Separatori italiani: 12,345.67 -> 12.345,67."""
+    return text.translate(str.maketrans({",": ".", ".": ","}))
+
+
 def fmt_price(value: Optional[float]) -> str:
     if value is None or not math.isfinite(value):
         return "—"
-    return f"{value:,.{6 if abs(value) < 1 else 4 if abs(value) < 100 else 2}f}"
+    return _it(f"{value:,.{6 if abs(value) < 1 else 4 if abs(value) < 100 else 2}f}")
+
+
+def fmt_money(value: Optional[float], signed: bool = False) -> str:
+    if value is None or not math.isfinite(value):
+        return "—"
+    return _it(f"{value:+,.2f}" if signed else f"{value:,.2f}")
+
+
+def fmt_qty(value: float) -> str:
+    if value == 0:
+        return "—"
+    decimals = 2 if value >= 100 else 4 if value >= 1 else 6
+    return _it(f"{value:,.{decimals}f}")
 
 
 def _spin(lo: int, hi: int, value: int) -> QSpinBox:
@@ -126,6 +156,7 @@ class MainWindow(QMainWindow):
         self._data: Optional[LoadedData] = None
         self._bundle: Optional[AnalysisBundle] = None
         self._table_trades: list[TradeResult] = []
+        self._money: Optional[MoneyResult] = None
         self._symbol_service = SymbolSearchService()
 
         self._build_menu()
@@ -171,6 +202,7 @@ class MainWindow(QMainWindow):
         side_layout.setContentsMargins(16, 16, 16, 16)
         side_layout.setSpacing(16)
         side_layout.addWidget(self._build_source_box())
+        side_layout.addWidget(self._build_money_box())
         side_layout.addWidget(self._build_params_box())
         side_layout.addStretch(1)
         scroll = QScrollArea()
@@ -256,6 +288,47 @@ class MainWindow(QMainWindow):
         self._on_source_changed()
         return box
 
+    def _build_money_box(self) -> QGroupBox:
+        box = QGroupBox("Capitale e rischio")
+        form = QFormLayout(box)
+        form.setSpacing(8)
+        d = MoneyParams()
+        self.capital_spin = _dspin(1.0, 1e12, d.initial_capital, 1000.0)
+        self.capital_spin.setGroupSeparatorShown(True)
+        self.capital_spin.setToolTip(
+            "Capitale iniziale, nella valuta di quotazione dello strumento"
+        )
+        self.risk_spin = _dspin(0.1, 100.0, d.risk_pct, 0.25)
+        self.risk_spin.setSuffix(" %")
+        self.risk_spin.setToolTip("Quota del capitale persa se viene colpito lo stop loss")
+        self.leverage_spin = _dspin(0.1, 100.0, d.max_leverage, 0.5, decimals=1)
+        self.leverage_spin.setSuffix(" ×")
+        self.leverage_spin.setToolTip(
+            "Nozionale massimo = capitale × leva. Con 1× non si usa leva: se lo stop è molto "
+            "vicino la posizione viene ridotta e il rischio effettivo scende sotto la soglia."
+        )
+        self.compound_check = QCheckBox("Reinvesti i profitti")
+        self.compound_check.setChecked(d.compounding)
+        self.compound_check.setToolTip(
+            "Rischio calcolato sul capitale corrente invece che su quello iniziale"
+        )
+        for spin in (self.capital_spin, self.risk_spin, self.leverage_spin):
+            spin.valueChanged.connect(self._update_money)
+        self.compound_check.toggled.connect(self._update_money)
+        form.addRow("Capitale", self.capital_spin)
+        form.addRow("Rischio/trade", self.risk_spin)
+        form.addRow("Leva massima", self.leverage_spin)
+        form.addRow(self.compound_check)
+        return box
+
+    def _money_params(self) -> MoneyParams:
+        return MoneyParams(
+            initial_capital=self.capital_spin.value(),
+            risk_pct=self.risk_spin.value(),
+            max_leverage=self.leverage_spin.value(),
+            compounding=self.compound_check.isChecked(),
+        )
+
     def _build_params_box(self) -> QGroupBox:
         box = QGroupBox("Parametri analisi")
         form = QFormLayout(box)
@@ -304,6 +377,10 @@ class MainWindow(QMainWindow):
             ("total_r", "Totale (R)"),
             ("profit_factor", "Profit factor"),
             ("max_drawdown_r", "Max drawdown (R)"),
+            ("final_equity", "Capitale finale"),
+            ("net_profit", "Profitto netto"),
+            ("return_pct", "Rendimento"),
+            ("max_drawdown_money", "Max drawdown"),
         ):
             value = QLabel("—")
             value.setObjectName("metricValue")
@@ -459,8 +536,7 @@ class MainWindow(QMainWindow):
         self._bundle = bundle
         self.chart.set_levels(bundle.analysis.levels)
         self.chart.set_setups(bundle.analysis.setups)
-        self._fill_table(bundle)
-        self._fill_metrics(bundle)
+        self._update_money()
         self.export_act.setEnabled(True)
         n_active = sum(
             t.outcome in (TradeOutcome.OPEN, TradeOutcome.PENDING) for t in bundle.backtest.trades
@@ -475,7 +551,20 @@ class MainWindow(QMainWindow):
         self._set_busy(False, "Analisi non riuscita")
         QMessageBox.critical(self, "Analisi", message)
 
-    def _fill_table(self, bundle: AnalysisBundle) -> None:
+    def _update_money(self) -> None:
+        """Ricalcola importi e metriche monetarie (operazione leggera, senza rianalisi)."""
+        if self._bundle is None:
+            return
+        try:
+            self._money = simulate_money(self._bundle.backtest.trades, self._money_params())
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        self._fill_table(self._bundle, self._money)
+        self._fill_metrics(self._bundle, self._money)
+
+    def _fill_table(self, bundle: AnalysisBundle, money: MoneyResult) -> None:
+        plans: dict[int, PositionPlan] = {id(p.trade): p for p in money.plans}
         # Più recenti in alto: i setup attivi sono i primi
         trades = sorted(bundle.backtest.trades, key=lambda t: -t.setup.signal_index)
         self._table_trades = trades
@@ -484,6 +573,7 @@ class MainWindow(QMainWindow):
         up, down = QColor("#26a69a"), QColor("#ef5350")
         for row, t in enumerate(trades):
             s = t.setup
+            plan = plans[id(t)]
             values = (
                 s.signal_time.strftime("%Y-%m-%d %H:%M"),
                 "Long" if s.direction is Direction.LONG else "Short",
@@ -492,10 +582,13 @@ class MainWindow(QMainWindow):
                 fmt_price(s.entry) + (" *" if s.entry_is_estimate else ""),
                 fmt_price(s.stop_loss),
                 fmt_price(s.take_profit),
-                f"1:{s.risk_reward:.2f}",
+                _it(f"1:{s.risk_reward:.2f}"),
                 "Strutturale" if s.target_source.value == "structural" else "R:R fisso",
                 OUTCOME_LABELS[t.outcome],
-                f"{t.r_multiple:+.2f}" if t.r_multiple is not None else "—",
+                _it(f"{t.r_multiple:+.2f}") if t.r_multiple is not None else "—",
+                fmt_qty(plan.quantity) + (" ⚠" if plan.capped else ""),
+                fmt_money(plan.risk_amount) if plan.quantity else "—",
+                fmt_money(plan.pnl, signed=True),
             )
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
@@ -503,17 +596,27 @@ class MainWindow(QMainWindow):
                     item.setForeground(up if s.direction is Direction.LONG else down)
                 if col == 10 and t.r_multiple is not None:
                     item.setForeground(up if t.r_multiple > 0 else down)
+                if col == 13 and plan.pnl is not None:
+                    item.setForeground(up if plan.pnl > 0 else down)
+                if col == 11 and plan.capped:
+                    item.setToolTip("Quantità ridotta dal limite di leva: rischio effettivo minore")
                 self.table.setItem(row, col, item)
 
-    def _fill_metrics(self, bundle: AnalysisBundle) -> None:
+    def _fill_metrics(self, bundle: AnalysisBundle, money: MoneyResult) -> None:
         m = bundle.backtest.summary()
         self.metric_labels["trades"].setText(str(int(m["trades"])))
-        self.metric_labels["win_rate"].setText(f"{m['win_rate'] * 100:.1f} %")
-        self.metric_labels["expectancy_r"].setText(f"{m['expectancy_r']:+.3f}")
-        self.metric_labels["total_r"].setText(f"{m['total_r']:+.2f}")
+        self.metric_labels["win_rate"].setText(_it(f"{m['win_rate'] * 100:.1f}") + " %")
+        self.metric_labels["expectancy_r"].setText(_it(f"{m['expectancy_r']:+.3f}"))
+        self.metric_labels["total_r"].setText(_it(f"{m['total_r']:+.2f}"))
         pf = m["profit_factor"]
-        self.metric_labels["profit_factor"].setText("∞" if math.isinf(pf) else f"{pf:.2f}")
-        self.metric_labels["max_drawdown_r"].setText(f"{m['max_drawdown_r']:.2f}")
+        self.metric_labels["profit_factor"].setText("∞" if math.isinf(pf) else _it(f"{pf:.2f}"))
+        self.metric_labels["max_drawdown_r"].setText(_it(f"{m['max_drawdown_r']:.2f}"))
+        self.metric_labels["final_equity"].setText(fmt_money(money.final_equity))
+        self.metric_labels["net_profit"].setText(fmt_money(money.net_profit, signed=True))
+        self.metric_labels["return_pct"].setText(_it(f"{money.return_pct:+.2f}") + " %")
+        self.metric_labels["max_drawdown_money"].setText(
+            f"{fmt_money(money.max_drawdown_amount)} ({_it(f'{money.max_drawdown_pct:.2f}')} %)"
+        )
 
     def _on_row_selected(self) -> None:
         rows = self.table.selectionModel().selectedRows()
@@ -531,7 +634,7 @@ class MainWindow(QMainWindow):
         req = self._data.request
         meta = {"source": req.kind.value, "symbol": req.symbol, "timeframe": req.timeframe}
         try:
-            export_json(self._bundle, path, meta)
+            export_json(self._bundle, path, meta, self._money)
         except OSError as exc:
             QMessageBox.warning(self, "Esporta JSON", f"Salvataggio non riuscito: {exc}")
             return

@@ -21,6 +21,9 @@ take profit, verificandoli con un backtest a barre.
   strutturale successivo (setup scartato se R:R < minimo) o a R:R fisso.
 - **Backtest**: una posizione alla volta, SL prioritario se SL e TP cadono nella stessa
   candela, commissioni opzionali; metriche in R (win rate, expectancy, profit factor, drawdown).
+- **Capitale e rischio**: position sizing a rischio fisso (% del capitale per trade), limite
+  di leva, reinvestimento opzionale dei profitti; P&L per trade, capitale finale, rendimento e
+  drawdown in valuta.
 - **GUI**: grafico interattivo pyqtgraph con fasce S/R e livelli dei setup, tabella dei
   setup, export JSON, guida integrata, verifica aggiornamenti da GitHub Releases.
 

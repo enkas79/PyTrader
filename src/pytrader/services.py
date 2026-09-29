@@ -12,7 +12,12 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
-from pytrader.backtest import Backtester, BacktestParams, BacktestResult
+from pytrader.backtest import (
+    Backtester,
+    BacktestParams,
+    BacktestResult,
+    MoneyResult,
+)
 from pytrader.data import CsvDataSource, DataSource, validate_ohlcv
 from pytrader.data.symbol_search import SymbolMatch, SymbolSearcher
 from pytrader.models import ValidationReport
@@ -123,10 +128,15 @@ def _finite(value: float) -> Optional[float]:
     return value if math.isfinite(value) else None
 
 
-def bundle_to_dict(bundle: AnalysisBundle, meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def bundle_to_dict(
+    bundle: AnalysisBundle,
+    meta: Optional[dict[str, Any]] = None,
+    money: Optional[MoneyResult] = None,
+) -> dict[str, Any]:
     """Struttura JSON: metadati, livelli correnti, metriche e trade con esito."""
     trades = []
-    for t in bundle.backtest.trades:
+    plans = money.plans if money is not None else [None] * len(bundle.backtest.trades)
+    for t, plan in zip(bundle.backtest.trades, plans):
         item = t.setup.to_dict()
         item.update(
             outcome=t.outcome.value,
@@ -138,6 +148,15 @@ def bundle_to_dict(bundle: AnalysisBundle, meta: Optional[dict[str, Any]] = None
             exit_price=t.exit_price,
             r_multiple=t.r_multiple,
         )
+        if plan is not None:
+            item.update(
+                quantity=plan.quantity,
+                notional=plan.notional,
+                risk_amount=plan.risk_amount,
+                pnl=plan.pnl,
+                equity_after=plan.equity_after,
+                capped_by_leverage=plan.capped,
+            )
         trades.append(item)
     df = bundle.analysis.data
     return {
@@ -150,15 +169,25 @@ def bundle_to_dict(bundle: AnalysisBundle, meta: Optional[dict[str, Any]] = None
         },
         "levels": [asdict(lv) for lv in bundle.analysis.levels],
         "metrics": {k: _finite(v) for k, v in bundle.backtest.summary().items()},
+        "money": (
+            {
+                **asdict(money.params),
+                **{k: _finite(v) for k, v in money.summary().items()},
+            }
+            if money is not None
+            else None
+        ),
         "trades": trades,
     }
 
 
 def export_json(
-    bundle: AnalysisBundle, path: Union[str, Path], meta: Optional[dict[str, Any]] = None
+    bundle: AnalysisBundle,
+    path: Union[str, Path],
+    meta: Optional[dict[str, Any]] = None,
+    money: Optional[MoneyResult] = None,
 ) -> Path:
     target = Path(path)
-    target.write_text(
-        json.dumps(bundle_to_dict(bundle, meta), indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    payload = bundle_to_dict(bundle, meta, money)
+    target.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return target

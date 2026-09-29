@@ -7,6 +7,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from PyQt6.QtCore import QLocale
 from PyQt6.QtWidgets import QApplication
 
 from pytrader.version import APP_AUTHOR, APP_NAME, get_version, resource_path
@@ -39,6 +40,8 @@ def run() -> int:
     _setup_logging()
     from pytrader.gui.main_window import MainWindow  # import dopo il logging
 
+    # Formato numerico italiano per spinbox e campi numerici (12.345,67)
+    QLocale.setDefault(QLocale(QLocale.Language.Italian, QLocale.Country.Italy))
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(get_version())
