@@ -10,7 +10,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PyQt6.QtCore import Qt, QThreadPool, QTimer, QUrl
-from PyQt6.QtGui import QAction, QCloseEvent, QColor, QDesktopServices, QKeySequence
+from PyQt6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QColor,
+    QDesktopServices,
+    QGuiApplication,
+    QKeySequence,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -52,12 +60,15 @@ from pytrader.backtest import (
     TradeResult,
     simulate_money,
 )
+from pytrader.gui.app import apply_theme
 from pytrader.gui.chart import ChartWidget
 from pytrader.gui.dialogs import HelpDialog
 from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
 from pytrader.gui.icons import app_icon
 from pytrader.gui.live_panel import LivePanel
 from pytrader.gui.symbol_completer import SearchJob, SymbolSearchController
+from pytrader.gui.theme import current_palette
+from pytrader.gui.walkforward_dialog import WalkForwardDialog
 from pytrader.gui.workers import Worker
 from pytrader.live import LiveSignal, WatchItem
 from pytrader.models import Direction
@@ -71,6 +82,7 @@ from pytrader.services import (
     load_data,
     run_analysis,
 )
+from pytrader.settings import AppSettings, ThemeMode
 from pytrader.signals import SignalParams, TargetMode
 from pytrader.updater import (
     ReleaseInfo,
@@ -144,11 +156,16 @@ class MainWindow(QMainWindow):
         self._table_trades: list[TradeResult] = []
         self._money: Optional[MoneyResult] = None
         self._symbol_service = SymbolSearchService()
+        self._settings = AppSettings.load()
+        self._wf_dialog: Optional[WalkForwardDialog] = None
 
         self._build_menu()
         self._build_ui()
         self._build_tray()
         self.statusBar().showMessage("Pronto")
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):  # Qt >= 6.5: segue il tema del sistema
+            hints.colorSchemeChanged.connect(self._on_system_scheme_changed)
         if self.live.watchlist.active and self.live.watchlist.items:
             # Il monitoraggio era attivo alla chiusura precedente: riparte da solo
             QTimer.singleShot(2000, self.live.start)
@@ -172,6 +189,29 @@ class MainWindow(QMainWindow):
         file_menu.addActions([open_act, self.export_act])
         file_menu.addSeparator()
         file_menu.addAction(quit_act)
+
+        view_menu = bar.addMenu("&Visualizza")
+        theme_menu = view_menu.addMenu("Tema")
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        self.theme_actions: dict[ThemeMode, QAction] = {}
+        for mode, label in (
+            (ThemeMode.DARK, "Scuro"),
+            (ThemeMode.LIGHT, "Chiaro"),
+            (ThemeMode.SYSTEM, "Come il sistema"),
+        ):
+            act = QAction(label, self, checkable=True)
+            act.setChecked(mode is self._settings.theme)
+            act.triggered.connect(lambda _checked, m=mode: self.set_theme(m))
+            self._theme_group.addAction(act)
+            theme_menu.addAction(act)
+            self.theme_actions[mode] = act
+
+        tools_menu = bar.addMenu("&Strumenti")
+        self.wf_act = QAction("Ottimizzazione walk-forward…", self)
+        self.wf_act.setEnabled(False)
+        self.wf_act.triggered.connect(self._open_walk_forward)
+        tools_menu.addAction(self.wf_act)
 
         help_menu = bar.addMenu("&Aiuto")
         guide_act = QAction("Guida", self)
@@ -420,6 +460,7 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool, message: str = "") -> None:
         self.load_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy and self._data is not None)
+        self.wf_act.setEnabled(not busy and self._data is not None)
         if message:
             self.statusBar().showMessage(message)
 
@@ -568,7 +609,8 @@ class MainWindow(QMainWindow):
         self._table_trades = trades
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(trades))
-        up, down = QColor("#26a69a"), QColor("#ef5350")
+        palette = current_palette()
+        up, down = QColor(palette.up), QColor(palette.down)
         for row, t in enumerate(trades):
             s = t.setup
             plan = plans[id(t)]
@@ -637,6 +679,59 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Esporta JSON", f"Salvataggio non riuscito: {exc}")
             return
         self.statusBar().showMessage(f"Esportato in {path}")
+
+    # ------------------------------------------------------------ tema
+    def set_theme(self, mode: ThemeMode) -> None:
+        """Applica e salva il tema; grafico e tabelle vengono ricolorati subito."""
+        self._settings.theme = mode
+        self.theme_actions[mode].setChecked(True)
+        try:
+            self._settings.save()
+        except OSError as exc:
+            logger.warning("Salvataggio impostazioni non riuscito: %s", exc)
+        self._refresh_theme()
+
+    def _refresh_theme(self) -> None:
+        palette = apply_theme(self._settings.theme)
+        self.chart.apply_palette(palette)
+        self._update_money()  # ricolora tabella setup e storico segnali
+
+    def _on_system_scheme_changed(self, *_args: Any) -> None:
+        if self._settings.theme is ThemeMode.SYSTEM:
+            self._refresh_theme()
+
+    # ------------------------------------------------------- walk-forward
+    def _open_walk_forward(self) -> None:
+        if self._data is None:
+            return
+        try:
+            params = self._signal_params()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Parametri", str(exc))
+            return
+        if self._wf_dialog is not None and self._wf_dialog.is_running:
+            self._wf_dialog.show()
+            self._wf_dialog.raise_()
+            return
+        dialog = WalkForwardDialog(
+            self._data.frame,
+            params,
+            BacktestParams(fee_rate=self.fee_spin.value() / 100.0),
+            self,
+        )
+        dialog.apply_requested.connect(self._apply_signal_params)
+        self._wf_dialog = dialog  # riferimento mantenuto finché il worker può rispondere
+        dialog.open()
+
+    def _apply_signal_params(self, params: SignalParams) -> None:
+        """Imposta nel pannello i parametri scelti dal walk-forward e rianalizza."""
+        self.prox_spin.setValue(params.proximity_atr)
+        self.buffer_spin.setValue(params.sl_buffer_atr)
+        self.rr_spin.setValue(params.min_rr)
+        self.tol_spin.setValue(params.levels.tolerance_atr)
+        self.pivot_spin.setValue(params.pivot_window)
+        self.statusBar().showMessage("Parametri del walk-forward applicati")
+        self._analyze()
 
     def _about(self) -> None:
         QMessageBox.about(

@@ -8,33 +8,12 @@ from typing import Optional
 
 import pandas as pd
 
-from pytrader.data import parse_timeframe
 from pytrader.live.watchlist import WatchItem
 from pytrader.models import TradeSetup
 from pytrader.services import DataRequest, LoadedData, load_data
 from pytrader.signals import SignalEngine, SignalParams
 
-_EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
-_EPOCH_MONDAY = pd.Timestamp("1970-01-05", tz="UTC")  # candele settimanali: lunedì 00:00 UTC
-CLOSE_DELAY = pd.Timedelta(seconds=20)  # attesa perché l'exchange consolidi la candela
-MAX_POLL = pd.Timedelta(minutes=5)  # tetto: copre sessioni non allineate (azioni, Yahoo)
-
 Loader = Callable[..., LoadedData]
-
-
-def next_check_time(timeframe: str, now: pd.Timestamp, aligned: bool = True) -> pd.Timestamp:
-    """Prossimo controllo: chiusura della candela corrente + breve ritardo.
-
-    ``aligned=True`` (exchange crypto): candele allineate all'epoch UTC, basta il confine.
-    ``aligned=False`` (Yahoo: azioni/ETF con sessioni proprie): il confine UTC può non
-    coincidere con la chiusura reale, quindi si controlla almeno ogni 5 minuti; i duplicati
-    sono comunque filtrati dallo storico.
-    """
-    tf = parse_timeframe(timeframe)
-    origin = _EPOCH_MONDAY if tf == pd.Timedelta(weeks=1) else _EPOCH
-    periods = (now - origin) // tf
-    boundary = origin + (periods + 1) * tf + CLOSE_DELAY
-    return boundary if aligned else min(boundary, now + MAX_POLL)
 
 
 @dataclass(frozen=True)

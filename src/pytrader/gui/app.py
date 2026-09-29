@@ -5,12 +5,24 @@ from __future__ import annotations
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
+from typing import Optional
 
-from PyQt6.QtCore import QLocale
+from PyQt6.QtCore import QLocale, Qt
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication
 
+from pytrader.gui.theme import (
+    Palette,
+    ThemeMode,
+    current_palette,
+    load_template,
+    render_stylesheet,
+    resolve_palette,
+    set_current_palette,
+)
+from pytrader.settings import AppSettings
 from pytrader.storage import app_data_dir
-from pytrader.version import APP_AUTHOR, APP_NAME, get_version, resource_path
+from pytrader.version import APP_AUTHOR, APP_NAME, get_version
 
 
 def _setup_logging() -> None:
@@ -28,12 +40,33 @@ def _setup_logging() -> None:
     )
 
 
-def load_stylesheet() -> str:
+def load_stylesheet(palette: Optional[Palette] = None) -> str:
+    """Foglio di stile per ``palette`` (default: quella attiva)."""
     try:
-        return resource_path("styles.qss").read_text(encoding="utf-8")
+        template = load_template()
     except OSError:
         logging.getLogger(__name__).warning("styles.qss non trovato: stile di default")
         return ""
+    return render_stylesheet(template, palette or current_palette())
+
+
+def system_prefers_dark() -> bool:
+    """Tema del sistema operativo (Qt >= 6.5); se ignoto si assume scuro."""
+    hints = QGuiApplication.styleHints()
+    scheme = getattr(hints, "colorScheme", None)
+    if scheme is None:
+        return True
+    return scheme() != Qt.ColorScheme.Light
+
+
+def apply_theme(mode: ThemeMode) -> Palette:
+    """Attiva la palette del tema e aggiorna il foglio di stile dell'applicazione."""
+    palette = resolve_palette(mode, system_prefers_dark())
+    set_current_palette(palette)
+    app = QApplication.instance()
+    if isinstance(app, QApplication):
+        app.setStyleSheet(load_stylesheet(palette))
+    return palette
 
 
 def run() -> int:
@@ -49,7 +82,7 @@ def run() -> int:
     app.setStyle("Fusion")
     # La chiusura della finestra non termina l'app se il monitoraggio live è nella tray
     app.setQuitOnLastWindowClosed(False)
-    app.setStyleSheet(load_stylesheet())
+    apply_theme(AppSettings.load().theme)
     window = MainWindow()
     window.show()
     return app.exec()
