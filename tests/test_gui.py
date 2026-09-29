@@ -38,3 +38,47 @@ def test_main_window_popola_tabella(qapp: QApplication, random_walk: pd.DataFram
     menus = [a.text() for a in window.menuBar().actions()]
     assert menus == ["&File", "&Aiuto"]
     window.close()
+
+
+def test_ricerca_simbolo_popola_lista_e_inserisce_ticker(qapp: QApplication) -> None:
+    from PyQt6.QtCore import QThreadPool
+
+    from pytrader.data.symbol_search import SymbolMatch
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.services import SourceKind
+
+    window = MainWindow()
+    calls: list[tuple[SourceKind, str]] = []
+
+    def fake_search(kind, query, exchange="binance", limit=15):
+        calls.append((kind, query))
+        return [SymbolMatch("VWCE.DE", "Vanguard FTSE All-World", "XETRA", "ETF")]
+
+    window._symbol_service.search = fake_search  # type: ignore[method-assign]
+    window.source_combo.setCurrentIndex(window.source_combo.findData(SourceKind.YFINANCE))
+    window.symbol_search._timer.setInterval(0)
+    window.symbol_edit.setText("vanguard all")
+    window.symbol_edit.textEdited.emit("vanguard all")
+    for _ in range(50):
+        qapp.processEvents()
+        QThreadPool.globalInstance().waitForDone(50)
+        if window.symbol_search.model.rowCount():
+            break
+    assert calls == [(SourceKind.YFINANCE, "vanguard all")]
+    model = window.symbol_search.model
+    assert model.rowCount() == 1
+    index = window.symbol_search.completer.completionModel().index(0, 0)
+    assert "Vanguard" in index.data()
+    window.symbol_search.completer.activated[type(index)].emit(index)
+    assert window.symbol_edit.text() == "VWCE.DE"
+    window.close()
+
+
+def test_ricerca_disattivata_per_csv(qapp: QApplication) -> None:
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.services import SourceKind
+
+    window = MainWindow()
+    window.source_combo.setCurrentIndex(window.source_combo.findData(SourceKind.CSV))
+    assert window._symbol_job("apple") is None
+    window.close()

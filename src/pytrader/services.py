@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -13,6 +14,7 @@ import pandas as pd
 
 from pytrader.backtest import Backtester, BacktestParams, BacktestResult
 from pytrader.data import CsvDataSource, DataSource, validate_ohlcv
+from pytrader.data.symbol_search import SymbolMatch, SymbolSearcher
 from pytrader.models import ValidationReport
 from pytrader.signals import AnalysisResult, SignalEngine, SignalParams
 from pytrader.version import get_version
@@ -59,6 +61,37 @@ def make_source(request: DataRequest) -> DataSource:
     from pytrader.data.yfinance_source import YFinanceDataSource
 
     return YFinanceDataSource()
+
+
+class SymbolSearchService:
+    """Mantiene un searcher per sorgente/exchange (la cache dei mercati ccxt resta valida)."""
+
+    def __init__(self) -> None:
+        self._searchers: dict[tuple[SourceKind, str], SymbolSearcher] = {}
+        self._lock = threading.Lock()  # chiamato da più worker del QThreadPool
+
+    def search(
+        self, kind: SourceKind, query: str, exchange: str = "binance", limit: int = 15
+    ) -> list[SymbolMatch]:
+        if kind is SourceKind.CSV:
+            return []
+        key = (kind, exchange if kind is SourceKind.CCXT else "")
+        with self._lock:
+            searcher = self._searchers.get(key)
+            if searcher is None:
+                searcher = self._make(kind, exchange)
+                self._searchers[key] = searcher
+            return searcher.search(query, limit)
+
+    @staticmethod
+    def _make(kind: SourceKind, exchange: str) -> SymbolSearcher:
+        if kind is SourceKind.CCXT:
+            from pytrader.data.symbol_search import CcxtSymbolSearcher
+
+            return CcxtSymbolSearcher(exchange)
+        from pytrader.data.symbol_search import YFinanceSymbolSearcher
+
+        return YFinanceSymbolSearcher()
 
 
 def load_data(request: DataRequest) -> LoadedData:

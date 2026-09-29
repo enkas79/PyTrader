@@ -9,6 +9,9 @@ take profit, verificandoli con un backtest a barre.
 - **Dati**: CSV locale, exchange crypto via `ccxt`, azioni/indici/forex via `yfinance`.
   Validazione della serie (duplicati, candele incoerenti); i buchi temporali vengono
   segnalati, mai riempiti con candele fittizie.
+- **Ricerca ticker**: digitando il nome di un'azienda, fondo o ETF compare una lista di
+  suggerimenti (Yahoo Finance, con tolleranza agli errori di battitura) o delle coppie
+  dell'exchange (ccxt); la selezione inserisce il ticker corretto.
 - **Analisi**: ATR di Wilder, volume medio, swing pivot con conferma ritardata, livelli S/R
   per clustering dei pivot (tolleranza in multipli di ATR, tocchi minimi).
 - **Pattern**: hammer / shooting star (pin bar), bullish/bearish engulfing,

@@ -10,7 +10,11 @@ _HELP_HTML = """
 <h2>Guida a PyTrader</h2>
 <h3>1. Caricare i dati</h3>
 <p>Scegli la sorgente (<b>CSV</b>, <b>ccxt</b> per gli exchange crypto, <b>yfinance</b> per
-azioni/indici/forex), indica simbolo e timeframe e premi <b>Carica</b>. Il CSV deve contenere
+azioni/indici/forex), indica simbolo e timeframe e premi <b>Carica</b>. Se non ricordi il
+ticker, scrivi il nome dell'azienda, del fondo o dell'ETF (es. <i>Vanguard world</i>): dopo un
+istante compare una lista di suggerimenti da cui scegliere; il campo viene compilato con il
+ticker corretto. Con ccxt la ricerca filtra le coppie dell'exchange (es. <i>BTC</i>). Il CSV
+deve contenere
 le colonne <i>timestamp, open, high, low, close</i> (volume facoltativo). Le candele incoerenti o
 duplicate vengono rimosse; i buchi temporali sono segnalati nella scheda <b>Dati</b> ma
 <u>non</u> vengono riempiti.</p>

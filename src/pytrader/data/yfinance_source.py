@@ -10,12 +10,21 @@ from pytrader.data.base import OHLCV_COLUMNS, DataSource, DataSourceError
 
 # Timeframe interno -> intervallo yfinance
 _INTERVALS: dict[str, str] = {
-    "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-    "1h": "60m", "1d": "1d", "1w": "1wk",
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "60m",
+    "1d": "1d",
+    "1w": "1wk",
 }
 # Periodo massimo consentito da Yahoo per gli intraday
 _DEFAULT_PERIOD: dict[str, str] = {
-    "1m": "7d", "5m": "60d", "15m": "60d", "30m": "60d", "1h": "730d",
+    "1m": "7d",
+    "5m": "60d",
+    "15m": "60d",
+    "30m": "60d",
+    "1h": "730d",
 }
 
 
