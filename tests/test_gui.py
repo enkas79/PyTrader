@@ -537,3 +537,62 @@ def test_leva_spiegata_nel_riquadro(qapp: QApplication, random_walk: pd.DataFram
     assert window.metric_labels["final_equity"].text() != before
     assert "Limite raggiunto" in window.leverage_hint.text()
     window.close()
+
+
+def test_dimensionamento_importo_e_percentuale(
+    qapp: QApplication, random_walk: pd.DataFrame
+) -> None:
+    from pytrader.backtest import SizingMode
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import COL, MainWindow
+    from pytrader.gui.params_panel import money_summary
+
+    window = MainWindow()
+    window.show()
+    frame, report = validate_ohlcv(random_walk)
+    window._data = LoadedData(DataRequest(kind=SourceKind.CSV), frame, report)
+    window._on_analyzed(run_analysis(frame))
+    form = window._money_form
+
+    window.sizing_combo.setCurrentIndex(window.sizing_combo.findData(SizingMode.PERCENT))
+    assert form.isRowVisible(window.pct_spin) and not form.isRowVisible(window.risk_spin)
+    assert form.labelForField(window.leverage_spin).text() == "Leva"
+    window.pct_spin.setValue(10)
+    window.leverage_spin.setValue(1)
+    one = window.metric_labels["net_profit"].text()
+    window.leverage_spin.setValue(3)  # ora la leva moltiplica: risultati diversi
+    assert window.metric_labels["net_profit"].text() != one
+    assert "Perdita allo stop per trade" in window.leverage_hint.text()
+    assert "Quota 10 %" in money_summary(window._money_params())
+
+    window.sizing_combo.setCurrentIndex(window.sizing_combo.findData(SizingMode.AMOUNT))
+    window.amount_spin.setValue(2_000)
+    window.leverage_spin.setValue(1)
+    plan = next(p for p in window._money.plans if p.quantity > 0)  # type: ignore[union-attr]
+    assert plan.notional == pytest.approx(2_000)  # importo × leva 1
+    row = window._table_trades.index(plan.trade)
+    assert window.table.item(row, COL["Rischio"]).text() != "—"
+
+    window.sizing_combo.setCurrentIndex(window.sizing_combo.findData(SizingMode.RISK))
+    assert form.labelForField(window.leverage_spin).text() == "Leva massima"
+    assert form.isRowVisible(window.risk_spin)
+    window.close()
+
+
+def test_quantita_live_segue_il_dimensionamento() -> None:
+    from pytrader.backtest import MoneyParams, SizingMode
+    from pytrader.gui.live_panel import suggested_size
+
+    class Sig:
+        entry, risk = 100.0, 2.0
+
+    qty, risk = suggested_size(
+        Sig(),
+        MoneyParams(
+            10_000,
+            sizing=SizingMode.PERCENT,  # type: ignore[arg-type]
+            position_pct=10,
+            max_leverage=2,
+        ),
+    )
+    assert qty == pytest.approx(20) and risk == pytest.approx(40)
