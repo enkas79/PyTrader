@@ -462,8 +462,13 @@ Selezionando una riga il grafico si centra sul setup.</p>
 AAPL, EUR per ENI.MI, USDT per BTC/USDT).</li>
 <li><b>Rischio/trade</b>: percentuale del capitale persa se scatta lo stop. Valori tipici:
 0,5-2 %.</li>
-<li><b>Leva massima</b>: il controvalore della posizione non supera capitale × leva. Con 1× e
-stop molto vicini la quantità viene ridotta (⚠ in tabella) e si rischia meno del previsto.</li>
+<li><b>Leva massima</b>: il controvalore della posizione non supera capitale × leva. È un
+<b>limite, non un moltiplicatore</b>: la quantità nasce dal rischio % e dalla distanza dello
+stop, e la leva interviene solo se quella quantità supererebbe il limite. Con stop molto vicini
+la quantità viene ridotta (⚠ in tabella) e si rischia meno del previsto. Sotto il campo
+un'indicazione riporta la leva effettivamente usata e, se il limite è stato raggiunto, quella
+necessaria per non ridurre alcuna posizione. Se il limite non viene mai raggiunto, alzarlo non
+cambia i risultati: per posizioni più grandi va aumentato il rischio %.</li>
 <li><b>Reinvesti i profitti</b>: il rischio si calcola sul capitale corrente; disattivato, sul
 capitale iniziale.</li>
 </ul>

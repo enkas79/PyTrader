@@ -519,3 +519,21 @@ def test_selezione_trade_mostra_uscita(qapp: QApplication, random_walk: pd.DataF
     assert markers[0].data["y"][0] == pytest.approx(trade.exit_price)
     assert markers[0].opts["brush"].color().name() == "#ffc800"  # giallo con entrambi i temi
     window.close()
+
+
+def test_leva_spiegata_nel_riquadro(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow
+
+    window = MainWindow()
+    frame, report = validate_ohlcv(random_walk)
+    window._data = LoadedData(DataRequest(kind=SourceKind.CSV), frame, report)
+    window._on_analyzed(run_analysis(frame))
+    before = window.metric_labels["final_equity"].text()
+    window.leverage_spin.setValue(30)  # limite non vincolante: risultati invariati
+    assert window.metric_labels["final_equity"].text() == before
+    assert "non viene mai raggiunto" in window.leverage_hint.text()
+    window.leverage_spin.setValue(0.1)  # limite vincolante: quantità ridotte
+    assert window.metric_labels["final_equity"].text() != before
+    assert "Limite raggiunto" in window.leverage_hint.text()
+    window.close()

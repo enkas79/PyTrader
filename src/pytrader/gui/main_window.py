@@ -152,6 +152,23 @@ OUTCOME_LABELS = {
 }
 
 
+def leverage_hint(money: MoneyResult) -> str:
+    """Effetto della leva sull'ultima simulazione, in parole."""
+    if not money.plans:
+        return "Nessun trade simulato."
+    used = it_num(f"{money.max_leverage_used:.2f}")
+    required = it_num(f"{money.required_leverage:.1f}")
+    if money.capped_count:
+        return (
+            f"Limite raggiunto in {money.capped_count} trade (⚠): quantità ridotte e rischio "
+            f"effettivo minore. Per non ridurle servirebbe almeno {required}×."
+        )
+    return (
+        f"Leva usata al massimo {used}×: il limite non viene mai raggiunto, quindi alzarlo non "
+        "cambia i risultati. Per posizioni più grandi aumenta il rischio %."
+    )
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -485,6 +502,14 @@ class MainWindow(QMainWindow):
         form.addRow("Rischio/trade", self.risk_spin)
         form.addRow("Leva massima", self.leverage_spin)
         form.addRow(self.compound_check)
+        # Spiega l'effetto della leva sull'ultima simulazione: è un tetto, non un moltiplicatore
+        self.leverage_hint = QLabel(
+            "La leva è un limite al controvalore, non un moltiplicatore: la quantità dipende da "
+            "rischio % e distanza dello stop."
+        )
+        self.leverage_hint.setObjectName("hint")
+        self.leverage_hint.setWordWrap(True)
+        form.addRow(self.leverage_hint)
         return box
 
     def _money_params(self) -> MoneyParams:
@@ -721,6 +746,7 @@ class MainWindow(QMainWindow):
             return
         self._fill_table(self._bundle, self._money)
         self._fill_metrics(self._bundle, self._money)
+        self.leverage_hint.setText(leverage_hint(self._money))
 
     def _fill_table(self, bundle: AnalysisBundle, money: MoneyResult) -> None:
         plans: dict[int, PositionPlan] = {id(p.trade): p for p in money.plans}

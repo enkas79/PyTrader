@@ -83,6 +83,33 @@ class MoneyResult:
                 worst = max(worst, (peak - eq) / peak * 100)
         return worst
 
+    def _sized(self) -> list[PositionPlan]:
+        return [p for p in self.plans if p.quantity > 0]
+
+    @property
+    def max_leverage_used(self) -> float:
+        """Massimo controvalore / capitale di riferimento (corrente o iniziale) tra i trade."""
+        used = [
+            p.notional
+            / (p.equity_before if self.params.compounding else self.params.initial_capital)
+            for p in self._sized()
+        ]
+        return max(used, default=0.0)
+
+    @property
+    def capped_count(self) -> int:
+        return sum(p.capped for p in self.plans)
+
+    @property
+    def required_leverage(self) -> float:
+        """Leva minima con cui nessuna posizione verrebbe ridotta: rischio% × entry / rischio
+        unitario (non dipende dal capitale)."""
+        sized = [p for p in self.plans if p.trade.outcome is not TradeOutcome.SKIPPED]
+        return max(
+            (self.params.risk_pct / 100 * p.trade.setup.entry / p.trade.setup.risk for p in sized),
+            default=0.0,
+        )
+
     def summary(self) -> dict[str, float]:
         return {
             "initial_capital": self.params.initial_capital,
