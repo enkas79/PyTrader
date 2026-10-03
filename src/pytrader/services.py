@@ -39,6 +39,7 @@ class DataRequest:
     limit: Optional[int] = 1000
     exchange: str = "binance"
     csv_path: Optional[str] = None
+    adjusted: bool = False  # solo Yahoo: prezzi rettificati per split e dividendi
 
 
 @dataclass
@@ -65,7 +66,7 @@ def make_source(request: DataRequest) -> DataSource:
         return CcxtDataSource(request.exchange)
     from pytrader.data.yfinance_source import YFinanceDataSource
 
-    return YFinanceDataSource()
+    return YFinanceDataSource(adjusted=request.adjusted)
 
 
 class SymbolSearchService:
@@ -99,15 +100,22 @@ class SymbolSearchService:
         return YFinanceSymbolSearcher()
 
 
-def load_data(request: DataRequest, now: Optional[pd.Timestamp] = None) -> LoadedData:
+def load_data(
+    request: DataRequest,
+    now: Optional[pd.Timestamp] = None,
+    source: Optional[DataSource] = None,
+) -> LoadedData:
     """Scarica e valida la serie. Per le sorgenti remote esclude la candela in formazione:
-    tutte le analisi usano solo candele chiuse."""
+    tutte le analisi usano solo candele chiuse. ``source`` permette di riusare la stessa
+    sorgente su più simboli (con ccxt evita di riscaricare l'elenco dei mercati)."""
     if request.kind is not SourceKind.CSV and not request.symbol.strip():
         raise ValueError("Specifica un simbolo")
     is_csv = request.kind is SourceKind.CSV
     # Il CSV è caricato per intero: limite e timeframe valgono solo per le sorgenti remote
     limit = None if is_csv or request.limit is None else request.limit + 1
-    raw = make_source(request).fetch(request.symbol.strip(), request.timeframe, limit=limit)
+    raw = (source or make_source(request)).fetch(
+        request.symbol.strip(), request.timeframe, limit=limit
+    )
     timeframe: Optional[str] = None if is_csv else request.timeframe
     frame, report = validate_ohlcv(raw, timeframe)
     if not is_csv:
