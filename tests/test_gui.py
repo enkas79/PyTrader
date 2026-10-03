@@ -412,3 +412,71 @@ def test_screener_parametri_incoerenti_segnalati(
     assert "Servono più di" in warnings[-1]
     assert not dialog.is_running
     dialog.close()
+
+
+def test_guida_indice_ricerca_e_pdf(qapp: QApplication, tmp_path) -> None:
+    from PyQt6.QtCore import QThreadPool
+
+    from pytrader.gui.dialogs import HelpDialog
+    from pytrader.gui.help_content import SECTIONS
+
+    dialog = HelpDialog()
+    assert dialog.toc.count() == len(SECTIONS) >= 15
+    dialog.show_section("screener")
+    assert dialog.toc.currentItem().text().endswith("Screener multi-simbolo")
+    dialog.search_edit.setText("survivorship")
+    assert dialog.find_next() and dialog.find_next(backward=True)
+    dialog.search_edit.setText("parola-che-non-esiste")
+    assert not dialog.find_next()
+
+    opened = []
+    dialog._on_pdf_done = opened.append  # type: ignore[method-assign]  # niente viewer
+    dialog.export_pdf(str(tmp_path / "guida"))  # estensione aggiunta automaticamente
+    for _ in range(100):
+        QThreadPool.globalInstance().waitForDone(50)
+        qapp.processEvents()
+        if opened:
+            break
+    pdf = tmp_path / "guida.pdf"
+    assert opened == [pdf] and pdf.read_bytes()[:4] == b"%PDF"
+    dialog.close()
+
+
+def test_valori_per_famiglia_applicati(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.presets import AssetFamily, analysis_defaults
+
+    window = MainWindow()
+    frame, report = validate_ohlcv(random_walk)
+    request = DataRequest(kind=SourceKind.CCXT, symbol="BTC/USDT", timeframe="15m")
+    window._data = LoadedData(request, frame, report)
+    dialog = window.open_family_defaults()
+    assert dialog is not None
+    assert dialog.family() is AssetFamily.CRYPTO  # riconosciuta dal simbolo
+    assert dialog.table.rowCount() >= 4
+    dialog.family_combo.setCurrentIndex(dialog.family_combo.findData(AssetFamily.FOREX))
+    assert "30×" in [dialog.table.item(r, 1).text() for r in range(dialog.table.rowCount())]
+    dialog.accept()
+    expected = analysis_defaults(AssetFamily.FOREX, "15m", frame)
+    assert window.params_panel.fee_spin.value() == pytest.approx(expected.fee_pct)
+    assert window.leverage_spin.value() == pytest.approx(30)
+    assert window.params_panel.rr_spin.value() == pytest.approx(expected.signal.min_rr)
+    window.quit_app()
+
+
+def test_screener_valori_per_famiglia(qapp: QApplication) -> None:
+    from pytrader.gui.screener_dialog import ScreenerDialog
+    from pytrader.presets import AssetFamily
+
+    dialog = ScreenerDialog()
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData(SourceKind.YFINANCE))
+    dialog.symbols_edit.setPlainText("EURUSD=X GBPUSD=X")
+    dialog.timeframe_combo.setCurrentText("1d")
+    family = dialog.open_family_defaults()
+    assert family.family() is AssetFamily.FOREX
+    family.accept()
+    assert dialog.vol_weight_spin.value() == 0  # forex senza volume
+    assert (dialog.mom_spin.value(), dialog.skip_spin.value()) == (126, 5)
+    assert dialog.bars_spin.value() >= 126 + 21 * 20
+    dialog.close()

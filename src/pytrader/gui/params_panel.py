@@ -56,6 +56,7 @@ class ParamsPanel(QWidget):
 
     changed = pyqtSignal()  # un qualsiasi valore modificato
     analyze_requested = pyqtSignal()
+    family_requested = pyqtSignal()  # valori consigliati per famiglia di asset
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -89,6 +90,13 @@ class ParamsPanel(QWidget):
         reset.setObjectName("secondaryButton")
         reset.setToolTip("Ripristina i valori predefiniti (commissione esclusa)")
         reset.clicked.connect(lambda: self.set_params(SignalParams()))
+        self.family_button = QPushButton("Valori per famiglia di asset…")
+        self.family_button.setObjectName("secondaryButton")
+        self.family_button.setToolTip(
+            "Commissione, leva e R:R minimo adatti a crypto, azioni, ETF/indici, forex o "
+            "materie prime, con anteprima motivata"
+        )
+        self.family_button.clicked.connect(self.family_requested)
 
         form = QFormLayout()
         form.setSpacing(8)
@@ -115,6 +123,7 @@ class ParamsPanel(QWidget):
         layout.setSpacing(8)
         layout.addLayout(form)
         layout.addLayout(buttons)
+        layout.addWidget(self.family_button)
         layout.addWidget(hint)
 
     def params(self) -> SignalParams:
