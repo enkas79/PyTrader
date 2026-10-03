@@ -32,6 +32,9 @@ take profit, verificandoli con un backtest a barre.
   Yahoo rettificati per split e dividendi. La verifica storica confronta il punteggio con i
   rendimenti successivi (IC di Spearman, t-stat, rendimento per quantile) e dichiara se il
   vantaggio non è dimostrato. I simboli scelti si aggiungono alla watchlist live.
+- **Dimensionamento**: rischio % per trade (leva come tetto), importo fisso o % del capitale
+  (leva come moltiplicatore); indicazione del rischio effettivo per trade e dei trade in cui la
+  perdita allo stop supererebbe il margine.
 - **Valori per famiglia di asset**: crypto, azioni, ETF/indici, forex e materie prime.
   Commissione (metà spread inclusa) e leva (limiti ESMA retail) per famiglia; R:R minimo
   calcolato dal costo di un trade in R sulla serie caricata (netto ≥ 2:1); periodi dello

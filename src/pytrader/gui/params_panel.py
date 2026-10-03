@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from pytrader.analysis import LevelParams
-from pytrader.backtest import MoneyParams
+from pytrader.backtest import MoneyParams, SizingMode
 from pytrader.gui.formatting import fmt_money, fmt_num
 from pytrader.gui.widgets import dspin, spin
 from pytrader.signals import SignalParams, TargetMode
@@ -42,10 +42,17 @@ def params_summary(params: SignalParams, fee_pct: float) -> str:
 
 def money_summary(money: MoneyParams) -> str:
     """Riepilogo su una riga di capitale e rischio (barra laterale)."""
+    if money.sizing is SizingMode.AMOUNT:
+        size = f"Importo {fmt_money(money.position_amount)}"
+    elif money.sizing is SizingMode.PERCENT:
+        size = f"Quota {fmt_num(money.position_pct)} %"
+    else:
+        size = f"Rischio {fmt_num(money.risk_pct)} %"
+    lev = "Leva" if money.leverage_multiplies else "Leva max"
     parts = [
         f"Capitale {fmt_money(money.initial_capital)}",
-        f"Rischio {fmt_num(money.risk_pct)} %",
-        f"Leva {fmt_num(money.max_leverage)}×",
+        size,
+        f"{lev} {fmt_num(money.max_leverage)}×",
         "reinvesti" if money.compounding else "senza reinvestimento",
     ]
     return " · ".join(parts)

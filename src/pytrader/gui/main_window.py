@@ -57,6 +57,7 @@ from pytrader.backtest import (
     MoneyParams,
     MoneyResult,
     PositionPlan,
+    SizingMode,
     TradeOutcome,
     TradeResult,
     simulate_money,
@@ -152,21 +153,70 @@ OUTCOME_LABELS = {
 }
 
 
+SIZING_MODES = (
+    (
+        SizingMode.RISK,
+        "Rischio % per trade",
+        "Quantità = capitale × rischio% / distanza dello stop: ogni stop costa la stessa quota",
+    ),
+    (
+        SizingMode.AMOUNT,
+        "Importo fisso",
+        "Ogni trade impegna lo stesso importo, moltiplicato per la leva",
+    ),
+    (
+        SizingMode.PERCENT,
+        "% del capitale",
+        "Ogni trade impegna una quota del capitale, moltiplicata per la leva",
+    ),
+)
+SIZING_HINTS = {
+    SizingMode.RISK: "La leva è un tetto al controvalore, non un moltiplicatore: la quantità "
+    "dipende da rischio % e distanza dello stop.",
+    SizingMode.AMOUNT: "Controvalore = importo × leva. Il rischio per trade dipende dalla "
+    "distanza dello stop: controllalo qui dopo l'analisi.",
+    SizingMode.PERCENT: "Controvalore = quota del capitale × leva. Il rischio per trade dipende "
+    "dalla distanza dello stop: controllalo qui dopo l'analisi.",
+}
+HIGH_RISK_PCT = 5.0  # oltre questa perdita per trade il dimensionamento è aggressivo
+
+
 def leverage_hint(money: MoneyResult) -> str:
-    """Effetto della leva sull'ultima simulazione, in parole."""
-    if not money.plans:
+    """Effetto di leva e dimensionamento sull'ultima simulazione, in parole."""
+    if not money.plans or not money.risk_pcts():
         return "Nessun trade simulato."
-    used = it_num(f"{money.max_leverage_used:.2f}")
-    required = it_num(f"{money.required_leverage:.1f}")
-    if money.capped_count:
+    if not money.params.leverage_multiplies:
+        used = it_num(f"{money.max_leverage_used:.2f}")
+        required = it_num(f"{money.required_leverage:.1f}")
+        if money.capped_count:
+            return (
+                f"Limite raggiunto in {money.capped_count} trade (⚠): quantità ridotte e rischio "
+                f"effettivo minore. Per non ridurle servirebbe almeno {required}×."
+            )
         return (
-            f"Limite raggiunto in {money.capped_count} trade (⚠): quantità ridotte e rischio "
-            f"effettivo minore. Per non ridurle servirebbe almeno {required}×."
+            f"Leva usata al massimo {used}×: il limite non viene mai raggiunto, quindi alzarlo "
+            "non cambia i risultati. Per posizioni più grandi aumenta il rischio %."
         )
-    return (
-        f"Leva usata al massimo {used}×: il limite non viene mai raggiunto, quindi alzarlo non "
-        "cambia i risultati. Per posizioni più grandi aumenta il rischio %."
-    )
+    risks = money.risk_pcts()
+    avg = it_num(f"{sum(risks) / len(risks):.2f}")
+    worst = max(risks)
+    parts = [
+        f"Perdita allo stop per trade: media {avg} %, massima "
+        f"{it_num(f'{worst:.2f}')} % del capitale."
+    ]
+    if worst > HIGH_RISK_PCT:
+        parts.append(
+            f"⚠ Oltre il {it_num(f'{HIGH_RISK_PCT:.0f}')} %: pochi stop consecutivi "
+            "dimezzano il conto."
+        )
+    if money.over_margin_count:
+        parts.append(
+            f"⚠ In {money.over_margin_count} trade la perdita allo stop supera il margine: un "
+            "broker chiuderebbe la posizione prima (liquidazione)."
+        )
+    if money.capped_count:
+        parts.append(f"{money.capped_count} trade ridotti al capitale disponibile (⚠).")
+    return " ".join(parts)
 
 
 class MainWindow(QMainWindow):
@@ -471,9 +521,9 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_money_box(self) -> QGroupBox:
-        """Capitale e rischio: nel pannello staccabile, sotto i parametri di analisi."""
+        """Capitale e dimensionamento: nel pannello staccabile, sotto i parametri di analisi."""
         box = QGroupBox("Capitale e rischio")
-        form = QFormLayout(box)
+        form = QFormLayout()
         form.setSpacing(8)
         d = MoneyParams()
         self.capital_spin = dspin(1.0, 1e12, d.initial_capital, 1000.0)
@@ -481,36 +531,80 @@ class MainWindow(QMainWindow):
         self.capital_spin.setToolTip(
             "Capitale iniziale, nella valuta di quotazione dello strumento"
         )
+        self.sizing_combo = QComboBox()
+        for mode, label, tip in SIZING_MODES:
+            self.sizing_combo.addItem(label, mode)
+            self.sizing_combo.setItemData(
+                self.sizing_combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole
+            )
         self.risk_spin = dspin(0.1, 100.0, d.risk_pct, 0.25)
         self.risk_spin.setSuffix(" %")
         self.risk_spin.setToolTip("Quota del capitale persa se viene colpito lo stop loss")
+        self.amount_spin = dspin(1.0, 1e12, d.position_amount, 100.0)
+        self.amount_spin.setGroupSeparatorShown(True)
+        self.amount_spin.setToolTip(
+            "Capitale impegnato (margine) in ogni trade; mai oltre il capitale disponibile"
+        )
+        self.pct_spin = dspin(0.1, 100.0, d.position_pct, 1.0)
+        self.pct_spin.setSuffix(" %")
+        self.pct_spin.setToolTip("Quota del capitale impegnata (margine) in ogni trade")
         self.leverage_spin = dspin(0.1, 100.0, d.max_leverage, 0.5, decimals=1)
         self.leverage_spin.setSuffix(" ×")
-        self.leverage_spin.setToolTip(
-            "Nozionale massimo = capitale × leva. Con 1× non si usa leva: se lo stop è molto "
-            "vicino la posizione viene ridotta e il rischio effettivo scende sotto la soglia."
-        )
         self.compound_check = QCheckBox("Reinvesti i profitti")
         self.compound_check.setChecked(d.compounding)
         self.compound_check.setToolTip(
-            "Rischio calcolato sul capitale corrente invece che su quello iniziale"
+            "Rischio o quota calcolati sul capitale corrente invece che su quello iniziale"
         )
-        for money_spin in (self.capital_spin, self.risk_spin, self.leverage_spin):
+        self.sizing_combo.currentIndexChanged.connect(self._on_sizing_changed)
+        for money_spin in (
+            self.capital_spin, self.risk_spin, self.amount_spin, self.pct_spin,
+            self.leverage_spin,
+        ):  # fmt: skip
             money_spin.valueChanged.connect(self._update_money)
         self.compound_check.toggled.connect(self._update_money)
         form.addRow("Capitale", self.capital_spin)
+        form.addRow("Dimensione", self.sizing_combo)
         form.addRow("Rischio/trade", self.risk_spin)
+        form.addRow("Importo/trade", self.amount_spin)
+        form.addRow("Quota/trade", self.pct_spin)
         form.addRow("Leva massima", self.leverage_spin)
         form.addRow(self.compound_check)
-        # Spiega l'effetto della leva sull'ultima simulazione: è un tetto, non un moltiplicatore
-        self.leverage_hint = QLabel(
-            "La leva è un limite al controvalore, non un moltiplicatore: la quantità dipende da "
-            "rischio % e distanza dello stop."
-        )
+        # Spiega l'effetto di leva e dimensionamento sull'ultima simulazione; fuori dal
+        # QFormLayout, che sottostima l'altezza delle etichette a capo
+        self.leverage_hint = QLabel("")
         self.leverage_hint.setObjectName("hint")
         self.leverage_hint.setWordWrap(True)
-        form.addRow(self.leverage_hint)
+        layout = QVBoxLayout(box)
+        layout.setSpacing(8)
+        layout.addLayout(form)
+        layout.addWidget(self.leverage_hint)
+        self._money_form = form
+        self._on_sizing_changed()
         return box
+
+    def _on_sizing_changed(self) -> None:
+        """Mostra solo il campo della modalità scelta e adegua il significato della leva."""
+        mode = self.sizing_combo.currentData()
+        form = self._money_form
+        form.setRowVisible(self.risk_spin, mode is SizingMode.RISK)
+        form.setRowVisible(self.amount_spin, mode is SizingMode.AMOUNT)
+        form.setRowVisible(self.pct_spin, mode is SizingMode.PERCENT)
+        label = form.labelForField(self.leverage_spin)
+        if mode is SizingMode.RISK:
+            label.setText("Leva massima")  # type: ignore[union-attr]
+            self.leverage_spin.setToolTip(
+                "Tetto al controvalore: capitale × leva. Interviene solo se la quantità calcolata "
+                "dal rischio lo supera (⚠ in tabella)."
+            )
+        else:
+            label.setText("Leva")  # type: ignore[union-attr]
+            self.leverage_spin.setToolTip(
+                "Moltiplicatore: controvalore = margine × leva. Aumenta guadagni e perdite "
+                "nella stessa proporzione."
+            )
+        if self._bundle is None:
+            self.leverage_hint.setText(SIZING_HINTS[mode])
+        self._update_money()
 
     def _money_params(self) -> MoneyParams:
         return MoneyParams(
@@ -518,6 +612,9 @@ class MainWindow(QMainWindow):
             risk_pct=self.risk_spin.value(),
             max_leverage=self.leverage_spin.value(),
             compounding=self.compound_check.isChecked(),
+            sizing=self.sizing_combo.currentData(),
+            position_amount=self.amount_spin.value(),
+            position_pct=self.pct_spin.value(),
         )
 
     def _build_params_summary(self) -> QGroupBox:
@@ -791,7 +888,7 @@ class MainWindow(QMainWindow):
                         "volta non viene eseguito"
                     )
                 if col == COL["Quantità"] and plan.capped:
-                    item.setToolTip("Quantità ridotta dal limite di leva: rischio effettivo minore")
+                    item.setToolTip("Quantità ridotta dal tetto di leva o dal capitale disponibile")
                 self.table.setItem(row, col, item)
 
     @staticmethod
@@ -943,10 +1040,15 @@ class MainWindow(QMainWindow):
     ) -> None:
         defaults = analysis_defaults(family, timeframe, frame)
         self.params_panel.fee_spin.setValue(defaults.fee_pct)
-        self.leverage_spin.setValue(defaults.max_leverage)
+        note = ""
+        if self.sizing_combo.currentData() is SizingMode.RISK:
+            self.leverage_spin.setValue(defaults.max_leverage)
+        else:
+            # Il valore consigliato è un tetto: usarlo come moltiplicatore cambierebbe il rischio
+            note = " (leva invariata: con questo dimensionamento la moltiplica)"
         self.params_panel.set_params(defaults.signal)
         self.statusBar().showMessage(
-            f"Valori per {PROFILES[family].label} applicati: rianalizza (F5) per aggiornare"
+            f"Valori per {PROFILES[family].label} applicati{note}: rianalizza (F5) per aggiornare"
         )
 
     # ------------------------------------------------------------ screener

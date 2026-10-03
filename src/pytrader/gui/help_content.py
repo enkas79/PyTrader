@@ -455,27 +455,60 @@ Selezionando una riga il grafico si centra sul setup.</p>
     ),
     HelpSection(
         "money",
-        "Capitale e rischio",
-        """
+        "Capitale e dimensionamento",
+        f"""
 <ul>
 <li><b>Capitale</b>: somma iniziale, nella valuta di quotazione dello strumento (USD per
 AAPL, EUR per ENI.MI, USDT per BTC/USDT).</li>
-<li><b>Rischio/trade</b>: percentuale del capitale persa se scatta lo stop. Valori tipici:
-0,5-2 %.</li>
-<li><b>Leva massima</b>: il controvalore della posizione non supera capitale × leva. È un
-<b>limite, non un moltiplicatore</b>: la quantità nasce dal rischio % e dalla distanza dello
-stop, e la leva interviene solo se quella quantità supererebbe il limite. Con stop molto vicini
-la quantità viene ridotta (⚠ in tabella) e si rischia meno del previsto. Sotto il campo
-un'indicazione riporta la leva effettivamente usata e, se il limite è stato raggiunto, quella
-necessaria per non ridurre alcuna posizione. Se il limite non viene mai raggiunto, alzarlo non
-cambia i risultati: per posizioni più grandi va aumentato il rischio %.</li>
-<li><b>Reinvesti i profitti</b>: il rischio si calcola sul capitale corrente; disattivato, sul
-capitale iniziale.</li>
+<li><b>Dimensione</b>: come si decide quanto investire in ogni trade (vedi tabella).</li>
+<li><b>Leva</b>: nella modalità a rischio è un <b>tetto</b> (leva massima); nelle modalità a
+importo o a quota è un <b>moltiplicatore</b>. Il nome del campo cambia di conseguenza.</li>
+<li><b>Reinvesti i profitti</b>: rischio o quota calcolati sul capitale corrente; disattivato,
+sul capitale iniziale. Con l'importo fisso l'importo resta lo stesso, ma mai oltre il capitale
+disponibile.</li>
 </ul>
-<p><b>Formula</b>: quantità = min(capitale × rischio% / |entry − stop|, capitale × leva /
-entry). Il P&amp;L di un trade è quantità × rischio unitario × R.</p>
-<p>Questi valori aggiornano subito tabella e metriche in valuta, senza rifare l'analisi. Sono
-usati anche per la quantità suggerita nei segnali live.</p>
+{
+            _table(
+                ("Dimensione", "Quantità", "Ruolo della leva", "Quando usarla"),
+                [
+                    (
+                        "Rischio % per trade (predefinita)",
+                        "capitale × rischio% / |entry − stop|",
+                        "tetto: controvalore ≤ capitale × leva; interviene solo con stop molto "
+                        "vicini (⚠)",
+                        "per perdere sempre la stessa quota a ogni stop: è il metodo professionale",
+                    ),
+                    (
+                        "Importo fisso",
+                        "importo × leva / entry",
+                        "moltiplicatore",
+                        "per replicare un piano a importo costante (es. 1.000 € a operazione)",
+                    ),
+                    (
+                        "% del capitale",
+                        "capitale × quota% × leva / entry",
+                        "moltiplicatore",
+                        "per impegnare una frazione fissa del conto",
+                    ),
+                ],
+            )
+        }
+<p><b>Attenzione con importo e quota</b>: il rischio per trade non è più fisso ma dipende
+dalla distanza dello stop. Con leva alta un singolo stop può costare una parte grande del conto.
+Sotto i campi un'indicazione riporta, dopo l'analisi:</p>
+<ul>
+<li>la <b>perdita allo stop</b> media e massima in % del capitale (⚠ oltre il 5 %);</li>
+<li>i trade in cui la perdita allo stop <b>supera il margine</b>: un broker chiuderebbe la
+posizione prima dello stop (liquidazione), quindi il backtest è ottimistico;</li>
+<li>i trade ridotti perché l'importo superava il capitale disponibile (⚠ in tabella).</li>
+</ul>
+<p>Nella modalità a rischio indica invece la leva effettivamente usata e, se il tetto è stato
+raggiunto, quella necessaria per non ridurre alcuna posizione. Se il conto si azzera, i trade
+successivi non vengono più eseguiti.</p>
+<p>Il P&amp;L di un trade è quantità × rischio unitario × R. Questi valori aggiornano subito
+tabella e metriche in valuta, senza rifare l'analisi, e determinano la quantità suggerita nei
+segnali live. <b>Valori per famiglia di asset</b> imposta la leva solo nella modalità a
+rischio, dove è un tetto.</p>
 """,
     ),
     HelpSection(

@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pytrader.backtest import MoneyParams
+from pytrader.backtest import MoneyParams, position_size
 from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
 from pytrader.gui.theme import current_palette
 from pytrader.gui.widgets import ColumnChooser
@@ -98,12 +98,8 @@ def interval_combo(item: WatchItem) -> QComboBox:
 
 def suggested_size(signal: LiveSignal, money: MoneyParams) -> tuple[float, float]:
     """Quantità e rischio in valuta sul capitale impostato (stesse regole del backtest)."""
-    if signal.risk <= 0 or signal.entry <= 0:
-        return 0.0, 0.0
-    qty = min(
-        money.initial_capital * money.risk_pct / 100 / signal.risk,
-        money.initial_capital * money.max_leverage / signal.entry,
-    )
+    capital = money.initial_capital
+    qty, _margin, _capped = position_size(money, capital, capital, signal.entry, signal.risk)
     return qty, qty * signal.risk
 
 
