@@ -191,7 +191,7 @@ class ScreenerDialog(QDialog):
         self.verdict_label.setWordWrap(True)
 
         check_box = QGroupBox("Verifica storica")
-        check = QFormLayout(check_box)
+        check = QFormLayout()
         check.setSpacing(8)
         self.check_labels: dict[str, QLabel] = {}
         for key, label in (
@@ -212,8 +212,13 @@ class ScreenerDialog(QDialog):
         self.buckets_label = QLabel("")
         self.buckets_label.setObjectName("hint")
         self.buckets_label.setWordWrap(True)
-        check.addRow(self.factors_label)
-        check.addRow(self.buckets_label)
+        # Le etichette a capo stanno fuori dal QFormLayout, che ne sottostima l'altezza
+        check_layout = QVBoxLayout(check_box)
+        check_layout.setSpacing(12)
+        check_layout.addLayout(check)
+        check_layout.addWidget(self.factors_label)
+        check_layout.addWidget(self.buckets_label)
+        check_layout.addStretch(1)
 
         self.rank_table = QTableWidget(0, len(RANK_COLUMNS))
         self.rank_table.setHorizontalHeaderLabels(RANK_COLUMNS)
@@ -455,9 +460,9 @@ class ScreenerDialog(QDialog):
         icon = "✔" if res.significant and s.ic_tstat > 0 else "⚠" if not res.significant else "✖"
         self.verdict_label.setText(f"{icon} {res.verdict()}")
         self.factors_label.setText(
-            "Singoli fattori (IC medio, t-stat): "
-            + "; ".join(
-                f"{f.name} {_num(f.mean_ic, '+.3f')} (t {_num(f.ic_tstat, '+.1f')})"
+            "Singoli fattori:\n"
+            + "\n".join(
+                f"• {f.name}: IC {_num(f.mean_ic, '+.3f')} · t {_num(f.ic_tstat, '+.1f')}"
                 for f in res.factors
             )
         )
@@ -466,9 +471,9 @@ class ScreenerDialog(QDialog):
                 f"Q{i + 1} {_num(v, '+.2f', '%')}" for i, v in enumerate(res.buckets)
             )
             self.buckets_label.setText(
-                f"Rendimento a {res.horizon} candele rispetto alla media dell'universo, dal "
-                f"punteggio più basso (Q1) al più alto: {quantiles}. Dal "
-                f"{res.first_date:%d/%m/%Y} al {res.last_date:%d/%m/%Y}; costi esclusi."
+                f"Rendimento a {res.horizon} candele rispetto alla media, da punteggio basso "
+                f"(Q1) ad alto:\n{quantiles}\n"
+                f"Dal {res.first_date:%d/%m/%Y} al {res.last_date:%d/%m/%Y}; costi esclusi."
             )
         else:
             self.buckets_label.setText("")
