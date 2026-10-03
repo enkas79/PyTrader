@@ -108,7 +108,7 @@ def test_capitale_ricalcola_importi(qapp: QApplication, random_walk: pd.DataFram
     assert window._money.params.initial_capital == 20_000
     assert window.metric_labels["final_equity"].text() == fmt_money(window._money.final_equity)
     assert window._money.final_equity != first
-    assert window.table.horizontalHeaderItem(13).text() == "P&L"
+    assert window.table.horizontalHeaderItem(14).text() == "P&L"
     assert fmt_money(12345.678, signed=True) == "+12.345,68"
     window.close()
 
@@ -480,3 +480,41 @@ def test_screener_valori_per_famiglia(qapp: QApplication) -> None:
     assert (dialog.mom_spin.value(), dialog.skip_spin.value()) == (126, 5)
     assert dialog.bars_spin.value() >= 126 + 21 * 20
     dialog.close()
+
+
+def test_selezione_trade_mostra_uscita(qapp: QApplication, random_walk: pd.DataFrame) -> None:
+    import pyqtgraph as pg
+
+    from pytrader.backtest import TradeOutcome
+    from pytrader.data import validate_ohlcv
+    from pytrader.gui.main_window import COL, MainWindow
+
+    window = MainWindow()
+    frame, report = validate_ohlcv(random_walk)
+    window._data = LoadedData(DataRequest(kind=SourceKind.CSV), frame, report)
+    window.chart.set_data(frame)
+    window._on_analyzed(run_analysis(frame))
+    trades = window._table_trades
+    # Trade chiuso più lungo: l'uscita cade oltre la finestra di zoom predefinita
+    row, trade = max(
+        ((r, t) for r, t in enumerate(trades) if t.exit_index is not None),
+        key=lambda rt: rt[1].exit_index - rt[1].setup.signal_index,  # type: ignore[operator]
+    )
+    exit_time = frame.index[trade.exit_index]
+    assert window.table.item(row, COL["Uscita"]).text().startswith(f"{exit_time:%Y-%m-%d %H:%M}")
+    skipped = [r for r, t in enumerate(trades) if t.outcome is TradeOutcome.SKIPPED]
+    if skipped:
+        assert "aperto" in window.table.item(skipped[0], COL["Esito"]).toolTip()
+
+    window.table.selectRow(row)
+    x0, x1 = window.chart.price_plot.viewRange()[0]
+    assert x0 <= trade.setup.signal_index and x1 > trade.exit_index
+    markers = [
+        i
+        for i in window.chart._setup_items
+        if isinstance(i, pg.ScatterPlotItem) and i.opts["symbol"] == "x"
+    ]
+    assert len(markers) == 1
+    assert markers[0].data["x"][0] == trade.exit_index
+    assert markers[0].data["y"][0] == pytest.approx(trade.exit_price)
+    window.close()

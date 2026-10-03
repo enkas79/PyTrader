@@ -123,11 +123,13 @@ TABLE_COLUMNS = (
     "R:R",
     "Target",
     "Esito",
+    "Uscita",
     "R",
     "Quantità",
     "Rischio",
     "P&L",
 )
+COL = {name: i for i, name in enumerate(TABLE_COLUMNS)}
 DEFAULT_HIDDEN_COLUMNS = ("Livello", "Target")  # già leggibili sul grafico
 METRICS = (  # chiave, didascalia: griglia 2 × 5 nella barra laterale
     ("trades", "Trade chiusi"),
@@ -743,6 +745,7 @@ class MainWindow(QMainWindow):
                 it_num(f"1:{s.risk_reward:.2f}"),
                 "Strutturale" if s.target_source.value == "structural" else "R:R fisso",
                 OUTCOME_LABELS[t.outcome],
+                self._exit_text(bundle, t),
                 it_num(f"{t.r_multiple:+.2f}") if t.r_multiple is not None else "—",
                 fmt_qty(plan.quantity) + (" ⚠" if plan.capped else ""),
                 fmt_money(plan.risk_amount) if plan.quantity else "—",
@@ -750,15 +753,28 @@ class MainWindow(QMainWindow):
             )
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
-                if col == 1:
+                if col == COL["Direzione"]:
                     item.setForeground(up if s.direction is Direction.LONG else down)
-                if col == 10 and t.r_multiple is not None:
+                if col == COL["R"] and t.r_multiple is not None:
                     item.setForeground(up if t.r_multiple > 0 else down)
-                if col == 13 and plan.pnl is not None:
+                if col == COL["P&L"] and plan.pnl is not None:
                     item.setForeground(up if plan.pnl > 0 else down)
-                if col == 11 and plan.capped:
+                if col == COL["Esito"] and t.outcome is TradeOutcome.SKIPPED:
+                    item.setToolTip(
+                        "Nato mentre un altro trade era ancora aperto: con una posizione alla "
+                        "volta non viene eseguito"
+                    )
+                if col == COL["Quantità"] and plan.capped:
                     item.setToolTip("Quantità ridotta dal limite di leva: rischio effettivo minore")
                 self.table.setItem(row, col, item)
+
+    @staticmethod
+    def _exit_text(bundle: AnalysisBundle, trade: TradeResult) -> str:
+        """Data e prezzo di chiusura; per i trade aperti, ancora in corso."""
+        if trade.exit_index is None or trade.exit_price is None:
+            return "in corso" if trade.outcome is TradeOutcome.OPEN else "—"
+        when = bundle.analysis.data.index[trade.exit_index]
+        return f"{when:%Y-%m-%d %H:%M} · {fmt_price(trade.exit_price)}"
 
     def _fill_metrics(self, bundle: AnalysisBundle, money: MoneyResult) -> None:
         m = bundle.backtest.summary()
@@ -788,7 +804,18 @@ class MainWindow(QMainWindow):
         if not rows or self._bundle is None:
             return
         trade = self._table_trades[rows[0].row()]
-        self.chart.focus_setup(trade.setup, self._bundle.analysis.setups)
+        last = len(self._bundle.analysis.data) - 1
+        if trade.exit_index is not None:
+            end: Optional[int] = trade.exit_index
+        else:
+            end = last if trade.outcome is TradeOutcome.OPEN else None
+        self.chart.focus_setup(
+            trade.setup,
+            self._bundle.analysis.setups,
+            end_index=end,
+            exit_price=trade.exit_price,
+            won=trade.outcome is TradeOutcome.WIN if trade.exit_index is not None else None,
+        )
 
     def _export_json(self) -> None:
         if self._bundle is None or self._data is None:

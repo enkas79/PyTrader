@@ -212,9 +212,12 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for s in setups:
             self._draw_setup_lines(s, highlight=False)
 
-    def _draw_setup_lines(self, s: TradeSetup, highlight: bool) -> None:
+    def _draw_setup_lines(
+        self, s: TradeSetup, highlight: bool, end_index: Optional[int] = None
+    ) -> None:
+        """Linee di entry, SL e TP; ``end_index`` le prolunga fino alla chiusura del trade."""
         x0 = s.signal_index + 1
-        x1 = x0 + SETUP_SPAN
+        x1 = max(x0 + SETUP_SPAN, end_index) if end_index is not None else x0 + SETUP_SPAN
         width = 2 if highlight else 1
         c = self._colors
         for price, color, label in (
@@ -231,18 +234,45 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self._setup_items.append(line)
             if highlight:
                 text = pg.TextItem(f"{label} {_num(price)}", color=color, anchor=(0, 0.5))
-                text.setPos(x1, price)
+                text.setPos(x1 + 1, price)  # staccata dal marcatore di uscita
                 self.price_plot.addItem(text)
                 self._setup_items.append(text)
 
-    def focus_setup(self, setup: TradeSetup, all_setups: list[TradeSetup]) -> None:
-        """Centra il grafico sul setup ed evidenzia i suoi livelli con etichette."""
+    def focus_setup(
+        self,
+        setup: TradeSetup,
+        all_setups: list[TradeSetup],
+        end_index: Optional[int] = None,
+        exit_price: Optional[float] = None,
+        won: Optional[bool] = None,
+    ) -> None:
+        """Centra il grafico sul setup e ne mostra l'intero percorso.
+
+        ``end_index``: candela di chiusura (o ultima candela se il trade è ancora aperto); la
+        vista arriva almeno fin lì. Con ``exit_price`` e ``won`` disegna il punto di uscita
+        (croce verde se vinto, rossa se perso).
+        """
         self.set_setups(all_setups)
-        self._draw_setup_lines(setup, highlight=True)
+        self._draw_setup_lines(setup, highlight=True, end_index=end_index)
         if self._df is None:
             return
+        if end_index is not None and exit_price is not None and won is not None:
+            color = self._colors.up if won else self._colors.down
+            marker = pg.ScatterPlotItem(
+                x=[end_index],
+                y=[exit_price],
+                symbol="x",
+                size=18,
+                brush=pg.mkBrush(color),
+                pen=pg.mkPen(color, width=2),
+            )
+            marker.setToolTip(f"Uscita {_num(exit_price)}")
+            self.price_plot.addItem(marker)
+            self._setup_items.append(marker)
         x0 = max(0, setup.signal_index - 80)
         x1 = setup.signal_index + SETUP_SPAN + 30
+        if end_index is not None:
+            x1 = max(x1, end_index + 15)  # spazio a destra per le etichette
         self._zoom(x0, x1)
         lo, hi = self.price_plot.viewRange()[1]
         lo = min(lo, setup.stop_loss, setup.take_profit)
