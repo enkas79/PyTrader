@@ -163,7 +163,8 @@ rosso per gli short sulla resistenza).</li>
 candele dopo il segnale.</li>
 <li><b>Trade selezionato</b>: selezionando una riga della tabella Setup il grafico mostra il
 trade dal segnale fino alla chiusura. Le linee di entry, stop e target arrivano alla candela di
-uscita e una <b>✕</b> segna il punto di chiusura (verde se vinto, rossa se perso). Per un trade
+uscita e una <b>✕ gialla</b> segna il punto di chiusura: se cade sulla linea del target il
+trade è vinto, se cade sullo stop è perso. Per un trade
 ancora in corso le linee arrivano all'ultima candela.</li>
 <li><b>Mouse</b>: rotella per lo zoom, trascinamento per spostarsi, tasto destro per il menu
 del grafico (es. <i>View All</i> per vedere tutta la serie). L'asse orizzontale mostra

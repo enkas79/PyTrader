@@ -15,6 +15,8 @@ from pytrader.models import Direction, Level, TradeSetup
 
 GRID_ALPHA = 0.15
 SETUP_SPAN = 15  # candele su cui disegnare i livelli di un setup
+EXIT_FILL = QColor(255, 200, 0)  # giallo: visibile su sfondo scuro e chiaro
+EXIT_OUTLINE = QColor(0, 0, 0, 170)  # bordo scuro: contrasto sul tema chiaro
 
 
 class ChartColors:
@@ -233,8 +235,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self.price_plot.addItem(line)
             self._setup_items.append(line)
             if highlight:
-                text = pg.TextItem(f"{label} {_num(price)}", color=color, anchor=(0, 0.5))
-                text.setPos(x1 + 1, price)  # staccata dal marcatore di uscita
+                # anchor x negativo: etichetta spostata a destra di una frazione della sua
+                # larghezza (in pixel, a ogni zoom), così la croce di uscita non la copre
+                text = pg.TextItem(f"{label} {_num(price)}", color=color, anchor=(-0.15, 0.5))
+                text.setPos(x1, price)
                 self.price_plot.addItem(text)
                 self._setup_items.append(text)
 
@@ -244,27 +248,25 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         all_setups: list[TradeSetup],
         end_index: Optional[int] = None,
         exit_price: Optional[float] = None,
-        won: Optional[bool] = None,
     ) -> None:
         """Centra il grafico sul setup e ne mostra l'intero percorso.
 
         ``end_index``: candela di chiusura (o ultima candela se il trade è ancora aperto); la
-        vista arriva almeno fin lì. Con ``exit_price`` e ``won`` disegna il punto di uscita
-        (croce verde se vinto, rossa se perso).
+        vista arriva almeno fin lì. Con ``exit_price`` disegna il punto di uscita (croce gialla:
+        l'esito si legge già dalla linea su cui cade).
         """
         self.set_setups(all_setups)
         self._draw_setup_lines(setup, highlight=True, end_index=end_index)
         if self._df is None:
             return
-        if end_index is not None and exit_price is not None and won is not None:
-            color = self._colors.up if won else self._colors.down
+        if end_index is not None and exit_price is not None:
             marker = pg.ScatterPlotItem(
                 x=[end_index],
                 y=[exit_price],
                 symbol="x",
-                size=18,
-                brush=pg.mkBrush(color),
-                pen=pg.mkPen(color, width=2),
+                size=20,
+                brush=pg.mkBrush(EXIT_FILL),
+                pen=pg.mkPen(EXIT_OUTLINE, width=1),
             )
             marker.setToolTip(f"Uscita {_num(exit_price)}")
             self.price_plot.addItem(marker)

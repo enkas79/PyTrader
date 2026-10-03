@@ -517,4 +517,5 @@ def test_selezione_trade_mostra_uscita(qapp: QApplication, random_walk: pd.DataF
     assert len(markers) == 1
     assert markers[0].data["x"][0] == trade.exit_index
     assert markers[0].data["y"][0] == pytest.approx(trade.exit_price)
+    assert markers[0].opts["brush"].color().name() == "#ffc800"  # giallo con entrambi i temi
     window.close()

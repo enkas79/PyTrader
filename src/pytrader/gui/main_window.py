@@ -814,7 +814,6 @@ class MainWindow(QMainWindow):
             self._bundle.analysis.setups,
             end_index=end,
             exit_price=trade.exit_price,
-            won=trade.outcome is TradeOutcome.WIN if trade.exit_index is not None else None,
         )
 
     def _export_json(self) -> None:
