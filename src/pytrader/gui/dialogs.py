@@ -11,7 +11,7 @@ _HELP_HTML = """
 <h3>Disposizione della finestra</h3>
 <ul>
 <li><b>Barra degli strumenti</b>: Carica dati (Ctrl+L), Analizza (F5), Parametri (Ctrl+P),
-Walk-forward. Quando cambi un parametro dopo l'analisi, <b>Analizza</b> si evidenzia: i
+Walk-forward, Screener. Quando cambi un parametro dopo l'analisi, <b>Analizza</b> si evidenzia: i
 risultati mostrati non corrispondono più ai valori impostati.</li>
 <li><b>Barra laterale</b>: sorgente dati, riepilogo delle impostazioni (clic per modificarle) e
 metriche del backtest sempre visibili.</li>
@@ -98,10 +98,36 @@ una buona per caso: preferisci griglie piccole.</li>
 ripete l'analisi.</li>
 </ul>
 <p>Lo slippage non è simulato: i risultati reali saranno peggiori.</p>
-<h3>7. Tema</h3>
+<h3>7. Screener multi-simbolo</h3>
+<p><b>Strumenti → Screener</b> confronta un elenco di simboli (Yahoo o exchange crypto) e li
+ordina per un <b>punteggio 0-100</b> calcolato solo da dati OHLCV:</p>
+<ul>
+<li><b>Volume relativo</b>: volume dell'ultima candela chiusa diviso la media delle candele
+precedenti (2× = il doppio del solito).</li>
+<li><b>Momentum</b>: variazione di prezzo sul periodo indicato, escluse le candele più recenti
+(sul brevissimo i prezzi tendono a invertire, non a proseguire).</li>
+<li>Il punteggio confronta i simboli tra loro (percentili): 50 = nella media dell'elenco. Un
+peso negativo inverte l'ordine di quel fattore, 0 lo esclude.</li>
+<li>I prezzi Yahoo sono rettificati per split e dividendi.</li>
+</ul>
+<p><b>Verifica storica</b>: a intervalli regolari il punteggio passato viene confrontato con il
+rendimento delle candele successive (orizzonte di verifica).</p>
+<ul>
+<li><b>IC</b>: correlazione tra punteggio e rendimento futuro (0 = nessuna relazione).</li>
+<li><b>t-stat</b>: sotto ±2 la relazione non si distingue dal caso. Servono almeno 20 periodi
+indipendenti.</li>
+<li><b>Quantili</b>: rendimento rispetto alla media dell'elenco, dal punteggio più basso (Q1) al
+più alto.</li>
+<li>Un elenco scelto oggi esclude i titoli falliti o delistati e i costi non sono inclusi: la
+verifica è ottimistica. Non modificare i pesi finché il risultato migliora: è overfitting.</li>
+</ul>
+<p>Seleziona una o più righe e premi <b>Aggiungi alla watchlist</b> per monitorarle nella scheda
+Live, oppure fai doppio clic per aprire il simbolo nel grafico. Il punteggio ordina i simboli
+da approfondire: non è un segnale di acquisto.</p>
+<h3>8. Tema</h3>
 <p><b>Visualizza → Tema</b>: scuro, chiaro o come il sistema operativo. La scelta viene
 ricordata al riavvio.</p>
-<h3>8. Esportazione</h3>
+<h3>9. Esportazione</h3>
 <p><b>File → Esporta JSON</b> salva setup, esiti, livelli correnti e metriche.</p>
 """
 

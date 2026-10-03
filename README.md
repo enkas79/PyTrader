@@ -27,6 +27,11 @@ take profit, verificandoli con un backtest a barre.
 - **Walk-forward**: ottimizzazione su griglia di parametri scelta in-sample e verificata
   out-of-sample su finestre consecutive (mobili o ancorate), obiettivo SQN/expectancy/totale R,
   efficienza walk-forward e stabilità delle scelte per riconoscere l'overfitting.
+- **Screener multi-simbolo**: classifica un elenco di simboli (Yahoo o ccxt) con un punteggio
+  0-100 a percentili su volume relativo e momentum (pesi regolabili, anche negativi), prezzi
+  Yahoo rettificati per split e dividendi. La verifica storica confronta il punteggio con i
+  rendimenti successivi (IC di Spearman, t-stat, rendimento per quantile) e dichiara se il
+  vantaggio non è dimostrato. I simboli scelti si aggiungono alla watchlist live.
 - **Segnali live**: watchlist multi-mercato controllata a ogni chiusura di candela (o a un
   intervallo scelto per mercato, entro limiti plausibili per sorgente e timeframe), notifiche
   desktop anche con la finestra ridotta nell'area di notifica, storico persistente dei segnali
@@ -58,6 +63,7 @@ src/
     ├── signals/            # SignalEngine: confluenza e gestione del rischio
     ├── backtest/           # Backtester e metriche
     ├── optimize/           # walk-forward: griglia, finestre IS/OOS, selezione
+    ├── screener/           # feature OHLCV, punteggio cross-sezionale, verifica storica
     ├── services.py         # casi d'uso senza Qt (caricamento, analisi, export)
     ├── live/               # watchlist, pianificazione controlli, scanner, storico segnali
     ├── settings.py         # preferenze (tema) in ~/.pytrader/settings.json

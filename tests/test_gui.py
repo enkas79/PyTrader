@@ -22,6 +22,15 @@ def qapp() -> QApplication:
     return app  # type: ignore[return-value]
 
 
+@pytest.fixture(autouse=True)
+def _no_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Niente verifica aggiornamenti in rete: la risposta arriverebbe a finestre già distrutte
+    dai test precedenti (crash durante i cicli di eventi lunghi)."""
+    from pytrader.gui.main_window import MainWindow
+
+    monkeypatch.setattr(MainWindow, "check_updates", lambda self, manual: None)
+
+
 def test_main_window_popola_tabella(qapp: QApplication, random_walk: pd.DataFrame) -> None:
     from pytrader.data import validate_ohlcv
     from pytrader.gui.main_window import MainWindow
@@ -276,7 +285,7 @@ def test_layout_pannello_parametri_e_barra(qapp: QApplication, random_walk: pd.D
         "Setup", "Dati", "Live",
     ]  # fmt: skip
     toolbar = [a.text() for a in window.toolbar.actions() if not a.isSeparator()]
-    assert toolbar == ["Carica dati", "Analizza", "Parametri", "Walk-forward…"]
+    assert toolbar == ["Carica dati", "Analizza", "Parametri", "Walk-forward…", "Screener…"]
     window.show_params()
     assert window.params_dock.isVisible() and window.params_act.isChecked()
 
@@ -326,3 +335,80 @@ def test_riepilogo_parametri() -> None:
 
     text = params_summary(SignalParams(min_rr=2.5, target_mode=TargetMode.FIXED_RR), 0.1)
     assert "R:R 2,5" in text and "R:R fisso" in text and "Comm. 0,1 %" in text
+
+
+def test_screener_classifica_e_aggiunge_alla_watchlist(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PyQt6.QtCore import QThreadPool
+
+    from pytrader.gui import screener_dialog
+    from pytrader.gui.main_window import MainWindow
+    from pytrader.screener import ScreenerConfig, run_screener
+    from tests.test_screener import _loader, _walk
+
+    frames = {f"S{i}": _walk(10 + i, drift=0.002 * (i - 3)) for i in range(6)}
+    monkeypatch.setattr(
+        screener_dialog,
+        "run_screener",
+        lambda req, params, **kw: run_screener(req, params, _loader(frames), **kw),
+    )
+    window = MainWindow()
+    assert window.screener_act in window.toolbar.actions()
+    window._open_screener()
+    dialog = window._screener_dialog
+    assert dialog is not None
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData(SourceKind.YFINANCE))
+    dialog.timeframe_combo.setCurrentText("1d")
+    dialog.bars_spin.setValue(400)
+    dialog.symbols_edit.setPlainText("s0 s1, s2; s3\ns4 s5 XXX")
+    dialog.mom_spin.setValue(60)
+    dialog.skip_spin.setValue(0)
+    dialog.horizon_spin.setValue(5)
+    dialog._run()
+    for _ in range(200):
+        QThreadPool.globalInstance().waitForDone(50)
+        qapp.processEvents()
+        if not dialog.is_running:
+            break
+    assert dialog.rank_table.rowCount() == 6
+    assert "XXX" in dialog.errors_label.text()
+    assert dialog.check_labels["periods"].text() != "—"
+    assert dialog.verdict_label.text()[0] in "✔⚠✖"
+    assert ScreenerConfig.load().params.momentum_bars == 60  # configurazione ricordata
+
+    dialog.rank_table.selectRow(0)
+    first = dialog._selected_symbols()[0]
+    dialog._add_selected()
+    dialog._add_selected()  # duplicato ignorato
+    assert [i.symbol for i in window.live.watchlist.items] == [first]
+    assert window.live.watchlist.items[0].kind is SourceKind.YFINANCE
+
+    opened = []
+    window._load = lambda: opened.append(window.symbol_edit.text())  # type: ignore[method-assign]
+    dialog._open_row(0, 0)
+    assert opened == [first] and window.timeframe_combo.currentText() == "1d"
+    window._open_screener()
+    assert window._screener_dialog is dialog  # riutilizzato, risultati conservati
+    window.quit_app()
+
+
+def test_screener_parametri_incoerenti_segnalati(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PyQt6.QtWidgets import QMessageBox
+
+    from pytrader.gui.screener_dialog import ScreenerDialog
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
+    dialog = ScreenerDialog()
+    dialog.symbols_edit.setPlainText("AAPL")
+    dialog._run()
+    assert "almeno 2 simboli" in warnings[-1]
+    dialog.symbols_edit.setPlainText("AAPL MSFT")
+    dialog.bars_spin.setValue(100)
+    dialog._run()  # 100 candele < momentum 126
+    assert "Servono più di" in warnings[-1]
+    assert not dialog.is_running
+    dialog.close()

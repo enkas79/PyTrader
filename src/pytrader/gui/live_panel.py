@@ -239,14 +239,23 @@ class LivePanel(QWidget):
                 self, "Watchlist", "Seleziona una sorgente remota (ccxt o Yahoo) e un simbolo."
             )
             return
-        if not self.watchlist.add(item):
+        if not self.add_items([item]):
             self.status_message.emit(f"{item.label} è già nella watchlist")
             return
+        self.status_message.emit(f"{item.label} aggiunto alla watchlist")
+
+    def add_items(self, items: list[WatchItem]) -> int:
+        """Aggiunge i mercati non ancora presenti; restituisce quanti sono stati aggiunti."""
+        added = [item for item in items if self.watchlist.add(item)]
+        if not added:
+            return 0
         self._save_watchlist()
         self._refresh_watchlist()
         if self._running:
-            self._due[item.key] = pd.Timestamp.now(tz="UTC")
-        self.status_message.emit(f"{item.label} aggiunto alla watchlist")
+            now = pd.Timestamp.now(tz="UTC")
+            for item in added:
+                self._due[item.key] = now
+        return len(added)
 
     def _remove_selected(self) -> None:
         rows = self.watch_table.selectionModel().selectedRows()

@@ -67,6 +67,7 @@ from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
 from pytrader.gui.icons import app_icon
 from pytrader.gui.live_panel import LivePanel
 from pytrader.gui.params_panel import ParamsPanel, money_summary
+from pytrader.gui.screener_dialog import ScreenerDialog
 from pytrader.gui.symbol_completer import SearchJob, SymbolSearchController
 from pytrader.gui.theme import current_palette
 from pytrader.gui.ui_state import STATE_VERSION, UiState
@@ -157,6 +158,7 @@ class MainWindow(QMainWindow):
         self._settings = AppSettings.load()
         self._ui = UiState()
         self._wf_dialog: Optional[WalkForwardDialog] = None
+        self._screener_dialog: Optional[ScreenerDialog] = None
         self._analyzed: Optional[tuple[SignalParams, float]] = None  # parametri dell'analisi
         self.params_stale = False  # analisi mostrata con parametri diversi da quelli correnti
 
@@ -196,6 +198,11 @@ class MainWindow(QMainWindow):
         self.wf_act.setToolTip("Ottimizzazione dei parametri con verifica fuori campione")
         self.wf_act.setEnabled(False)
         self.wf_act.triggered.connect(self._open_walk_forward)
+        self.screener_act = QAction("Screener…", self)
+        self.screener_act.setToolTip(
+            "Classifica più simboli per volume relativo e momentum, con verifica storica"
+        )
+        self.screener_act.triggered.connect(self._open_screener)
 
     def _build_params_dock(self) -> None:
         self.params_panel = ParamsPanel()
@@ -244,6 +251,7 @@ class MainWindow(QMainWindow):
         bar.addSeparator()
         bar.addAction(self.params_act)
         bar.addAction(self.wf_act)
+        bar.addAction(self.screener_act)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
         self.toolbar = bar
         toggle = bar.toggleViewAction()
@@ -298,7 +306,7 @@ class MainWindow(QMainWindow):
         tools_menu = bar.addMenu("&Strumenti")
         tools_menu.addActions([self.load_act, self.analyze_act])
         tools_menu.addSeparator()
-        tools_menu.addAction(self.wf_act)
+        tools_menu.addActions([self.wf_act, self.screener_act])
 
         help_menu = bar.addMenu("&Aiuto")
         guide_act = QAction("Guida", self)
@@ -824,6 +832,23 @@ class MainWindow(QMainWindow):
         self._wf_dialog = dialog  # riferimento mantenuto finché il worker può rispondere
         dialog.open()
 
+    # ------------------------------------------------------------ screener
+    def _open_screener(self) -> None:
+        if self._screener_dialog is None:
+            dialog = ScreenerDialog(parent=self)
+            dialog.add_requested.connect(self._add_screened)
+            dialog.open_requested.connect(self._open_watch_item)
+            self._screener_dialog = dialog  # riutilizzato: conserva risultati e worker
+        self._screener_dialog.show()
+        self._screener_dialog.raise_()
+        self._screener_dialog.activateWindow()
+
+    def _add_screened(self, items: list[WatchItem]) -> None:
+        added = self.live.add_items(items)
+        skipped = len(items) - added
+        note = f" ({skipped} già presenti)" if skipped else ""
+        self.statusBar().showMessage(f"{added} mercati aggiunti alla watchlist{note}")
+
     def _apply_signal_params(self, params: SignalParams) -> None:
         """Imposta nel pannello i parametri scelti dal walk-forward e rianalizza."""
         self.params_panel.set_params(params)
@@ -1062,6 +1087,8 @@ class MainWindow(QMainWindow):
                 )
             return
         self.live.shutdown()
+        if self._screener_dialog is not None:
+            self._screener_dialog.cancel()  # il worker si ferma al prossimo simbolo
         if self.tray is not None:
             self.tray.hide()
         event.accept()

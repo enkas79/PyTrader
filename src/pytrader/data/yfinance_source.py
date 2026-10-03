@@ -33,7 +33,8 @@ class YFinanceDataSource(DataSource):
 
     name = "yfinance"
 
-    def __init__(self) -> None:
+    def __init__(self, adjusted: bool = False) -> None:
+        self.adjusted = adjusted  # True: OHLC rettificati per split e dividendi
         try:
             import yfinance
         except ImportError as exc:
@@ -50,7 +51,7 @@ class YFinanceDataSource(DataSource):
         interval = _INTERVALS.get(timeframe)
         if interval is None:
             raise DataSourceError(f"Timeframe non supportato da yfinance: {timeframe}")
-        kwargs: dict[str, Any] = {"interval": interval, "auto_adjust": False}
+        kwargs: dict[str, Any] = {"interval": interval, "auto_adjust": self.adjusted}
         if since is not None:
             kwargs["start"] = pd.Timestamp(since).to_pydatetime()
         else:
