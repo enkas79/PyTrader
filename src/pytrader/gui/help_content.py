@@ -160,8 +160,11 @@ fascia è la dispersione dei pivot che la compongono.</li>
 segnale e del livello interessato (verso l'alto e verde per i long sul supporto, verso il basso e
 rosso per gli short sulla resistenza).</li>
 <li><b>Linee del setup</b>: entry, stop loss e take profit dei setup, disegnate per alcune
-candele dopo il segnale. Selezionando una riga della tabella Setup il grafico si centra su quel
-setup e lo evidenzia.</li>
+candele dopo il segnale.</li>
+<li><b>Trade selezionato</b>: selezionando una riga della tabella Setup il grafico mostra il
+trade dal segnale fino alla chiusura. Le linee di entry, stop e target arrivano alla candela di
+uscita e una <b>✕</b> segna il punto di chiusura (verde se vinto, rossa se perso). Per un trade
+ancora in corso le linee arrivano all'ultima candela.</li>
 <li><b>Mouse</b>: rotella per lo zoom, trascinamento per spostarsi, tasto destro per il menu
 del grafico (es. <i>View All</i> per vedere tutta la serie). L'asse orizzontale mostra
 data e ora delle candele.</li>
@@ -375,7 +378,10 @@ periodi sono ridotti in proporzione: per lo screener preferisci 1d.</li>
 <h3>Esiti</h3>
 <p><b>Vinto</b> (R netto &gt; 0), <b>Perso</b>, <b>In corso</b> (né stop né target ancora
 raggiunti), <b>In attesa</b> (segnale sull'ultima candela, ingresso non ancora avvenuto),
-<b>Saltato</b> (posizione già aperta).</p>
+<b>Saltato</b>: il setup è nato mentre il trade precedente era ancora aperto. Il backtest
+tiene una sola posizione alla volta, quindi non lo esegue e non ne calcola quantità né
+risultato; nel trading reale lo avresti ignorato o avresti dovuto aprire una seconda
+posizione.</p>
 <h3>Metriche (riquadro Backtest)</h3>
 {
             _table(
@@ -429,6 +435,10 @@ Selezionando una riga il grafico si centra sul setup.</p>
                     ("R:R", "rapporto tra distanza del target e distanza dello stop"),
                     ("Target", "strutturale (livello successivo) o R:R fisso"),
                     ("Esito", "Vinto, Perso, In corso, In attesa, Saltato"),
+                    (
+                        "Uscita",
+                        "data e prezzo di chiusura del trade; «in corso» se è ancora aperto",
+                    ),
                     ("R", "risultato netto in multipli del rischio"),
                     (
                         "Quantità",
