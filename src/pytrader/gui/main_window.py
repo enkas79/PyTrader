@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
 
+import pandas as pd
 from PyQt6.QtCore import Qt, QThreadPool, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
@@ -60,9 +61,11 @@ from pytrader.backtest import (
     TradeResult,
     simulate_money,
 )
+from pytrader.data import parse_timeframe
 from pytrader.gui.app import apply_theme
 from pytrader.gui.chart import ChartWidget
 from pytrader.gui.dialogs import HelpDialog
+from pytrader.gui.family_dialog import FamilyDefaultsDialog
 from pytrader.gui.formatting import fmt_money, fmt_price, fmt_qty, it_num
 from pytrader.gui.icons import app_icon
 from pytrader.gui.live_panel import LivePanel
@@ -76,6 +79,13 @@ from pytrader.gui.widgets import ClickableLabel, ColumnChooser, MetricCard, dspi
 from pytrader.gui.workers import Worker
 from pytrader.live import LiveSignal, WatchItem
 from pytrader.models import Direction
+from pytrader.presets import (
+    PROFILES,
+    AssetFamily,
+    Suggestion,
+    analysis_defaults,
+    detect_family,
+)
 from pytrader.services import (
     AnalysisBundle,
     DataRequest,
@@ -203,11 +213,15 @@ class MainWindow(QMainWindow):
             "Classifica più simboli per volume relativo e momentum, con verifica storica"
         )
         self.screener_act.triggered.connect(self._open_screener)
+        self.family_act = QAction("Valori per famiglia di asset…", self)
+        self.family_act.setToolTip("Commissione, leva e R:R minimo consigliati per tipo di mercato")
+        self.family_act.triggered.connect(self.open_family_defaults)
 
     def _build_params_dock(self) -> None:
         self.params_panel = ParamsPanel()
         self.params_panel.changed.connect(self._on_params_changed)
         self.params_panel.analyze_requested.connect(self._analyze)
+        self.params_panel.family_requested.connect(self.open_family_defaults)
         analysis_box = QGroupBox("Analisi")
         analysis_layout = QVBoxLayout(analysis_box)
         analysis_layout.setContentsMargins(0, 0, 0, 0)
@@ -307,6 +321,8 @@ class MainWindow(QMainWindow):
         tools_menu.addActions([self.load_act, self.analyze_act])
         tools_menu.addSeparator()
         tools_menu.addActions([self.wf_act, self.screener_act])
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.family_act)
 
         help_menu = bar.addMenu("&Aiuto")
         guide_act = QAction("Guida", self)
@@ -831,6 +847,55 @@ class MainWindow(QMainWindow):
         dialog.apply_requested.connect(self._apply_signal_params)
         self._wf_dialog = dialog  # riferimento mantenuto finché il worker può rispondere
         dialog.open()
+
+    # ------------------------------------------------- famiglia di asset
+    def _family_context(self) -> tuple[SourceKind, str, str]:
+        """Mercato di riferimento: quello dei dati caricati, altrimenti i campi correnti."""
+        if self._data is not None:
+            req = self._data.request
+            timeframe = req.timeframe
+            inferred = self._data.report.timeframe
+            if req.kind is SourceKind.CSV and inferred is not None:
+                # Il timeframe del CSV è dedotto dai dati, non dal selettore
+                timeframe = next(
+                    (tf for tf in TIMEFRAMES if parse_timeframe(tf) == inferred), timeframe
+                )
+            symbol = req.symbol or Path(req.csv_path or "").stem
+            return req.kind, symbol, timeframe
+        return (
+            self.source_combo.currentData(),
+            self.symbol_edit.text().strip(),
+            self.timeframe_combo.currentText(),
+        )
+
+    def open_family_defaults(self) -> Optional[FamilyDefaultsDialog]:
+        kind, symbol, timeframe = self._family_context()
+        frame = self._data.frame if self._data is not None else None
+
+        def compute(family: AssetFamily) -> tuple[Suggestion, ...]:
+            return analysis_defaults(family, timeframe, frame).notes
+
+        loaded = "serie caricata" if frame is not None else "nessuna serie caricata"
+        dialog = FamilyDefaultsDialog(
+            compute,
+            detect_family(kind, symbol),
+            f"Mercato: <b>{symbol or '—'}</b> · timeframe {timeframe} · {loaded}.",
+            self,
+        )
+        dialog.accepted.connect(lambda: self._apply_family(dialog.family(), timeframe, frame))
+        dialog.open()
+        return dialog
+
+    def _apply_family(
+        self, family: AssetFamily, timeframe: str, frame: Optional[pd.DataFrame]
+    ) -> None:
+        defaults = analysis_defaults(family, timeframe, frame)
+        self.params_panel.fee_spin.setValue(defaults.fee_pct)
+        self.leverage_spin.setValue(defaults.max_leverage)
+        self.params_panel.set_params(defaults.signal)
+        self.statusBar().showMessage(
+            f"Valori per {PROFILES[family].label} applicati: rianalizza (F5) per aggiornare"
+        )
 
     # ------------------------------------------------------------ screener
     def _open_screener(self) -> None:

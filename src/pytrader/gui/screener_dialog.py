@@ -29,11 +29,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from pytrader.gui.family_dialog import FamilyDefaultsDialog
 from pytrader.gui.formatting import fmt_price, it_num
 from pytrader.gui.theme import current_palette
 from pytrader.gui.widgets import dspin, spin
 from pytrader.gui.workers import Worker
 from pytrader.live import WatchItem
+from pytrader.presets import AssetFamily, detect_family, screener_defaults
 from pytrader.screener import (
     MAX_SYMBOLS,
     PRESETS,
@@ -157,6 +159,14 @@ class ScreenerDialog(QDialog):
         sc.addRow("Peso volume", self.vol_weight_spin)
         sc.addRow("Peso momentum", self.mom_weight_spin)
         sc.addRow("Orizzonte verifica", self.horizon_spin)
+        self.family_button = QPushButton("Valori per famiglia di asset…")
+        self.family_button.setObjectName("secondaryButton")
+        self.family_button.setToolTip(
+            "Converte 1 mese, 6 mesi e 1 settimana in candele secondo il calendario del mercato "
+            "e il timeframe; esclude il volume per il forex"
+        )
+        self.family_button.clicked.connect(self.open_family_defaults)
+        sc.addRow(self.family_button)
         weights_hint = QLabel(
             "Cambiare i pesi finché la verifica migliora è overfitting: decidili prima."
         )
@@ -342,6 +352,31 @@ class ScreenerDialog(QDialog):
         )
         with contextlib.suppress(OSError):  # preferenza non essenziale: si prosegue
             cfg.save()
+
+    def open_family_defaults(self) -> FamilyDefaultsDialog:
+        kind = self.source_combo.currentData()
+        symbols = parse_symbols(self.symbols_edit.toPlainText())
+        timeframe = self.timeframe_combo.currentText()
+        dialog = FamilyDefaultsDialog(
+            lambda family: screener_defaults(family, timeframe).notes,
+            detect_family(kind, symbols[0] if symbols else ""),
+            f"Timeframe <b>{timeframe}</b>: i periodi dello screener sono convertiti in candele.",
+            self,
+        )
+        dialog.accepted.connect(lambda: self._apply_family(dialog.family(), timeframe))
+        dialog.open()
+        return dialog
+
+    def _apply_family(self, family: AssetFamily, timeframe: str) -> None:
+        defaults = screener_defaults(family, timeframe)
+        p = defaults.params
+        self.vol_window_spin.setValue(p.volume_window)
+        self.mom_spin.setValue(p.momentum_bars)
+        self.skip_spin.setValue(p.skip_bars)
+        self.horizon_spin.setValue(p.horizon)
+        self.vol_weight_spin.setValue(p.volume_weight)
+        self.mom_weight_spin.setValue(p.momentum_weight)
+        self.bars_spin.setValue(defaults.bars)
 
     # ------------------------------------------------------------ esecuzione
     @property

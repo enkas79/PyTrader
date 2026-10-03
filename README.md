@@ -32,13 +32,19 @@ take profit, verificandoli con un backtest a barre.
   Yahoo rettificati per split e dividendi. La verifica storica confronta il punteggio con i
   rendimenti successivi (IC di Spearman, t-stat, rendimento per quantile) e dichiara se il
   vantaggio non è dimostrato. I simboli scelti si aggiungono alla watchlist live.
+- **Valori per famiglia di asset**: crypto, azioni, ETF/indici, forex e materie prime.
+  Commissione (metà spread inclusa) e leva (limiti ESMA retail) per famiglia; R:R minimo
+  calcolato dal costo di un trade in R sulla serie caricata (netto ≥ 2:1); periodi dello
+  screener convertiti da mesi a candele secondo calendario e timeframe. Anteprima motivata
+  prima di applicare. Nessuna ottimizzazione sui rendimenti passati.
 - **Segnali live**: watchlist multi-mercato controllata a ogni chiusura di candela (o a un
   intervallo scelto per mercato, entro limiti plausibili per sorgente e timeframe), notifiche
   desktop anche con la finestra ridotta nell'area di notifica, storico persistente dei segnali
   con quantità suggerita. Nessun ordine viene inviato all'exchange.
 - **GUI**: grafico interattivo pyqtgraph con fasce S/R e livelli dei setup, tabella dei
-  setup, export JSON, tema scuro/chiaro/di sistema, guida integrata, verifica aggiornamenti
-  da GitHub Releases.
+  setup, export JSON, tema scuro/chiaro/di sistema, verifica aggiornamenti da GitHub Releases.
+- **Guida integrata**: 20 sezioni con indice, ricerca e glossario; esportabile in PDF (A4)
+  dalla stessa fonte, quindi sempre allineata alla versione installata.
 - **Layout**: barra degli strumenti; barra laterale con sorgente, riepilogo impostazioni e
   metriche del backtest, senza scorrimento da 1080p (anche con zoom 125%); parametri e capitale
   in un pannello agganciabile o staccabile; colonne delle tabelle selezionabili; disposizione
@@ -64,6 +70,7 @@ src/
     ├── backtest/           # Backtester e metriche
     ├── optimize/           # walk-forward: griglia, finestre IS/OOS, selezione
     ├── screener/           # feature OHLCV, punteggio cross-sezionale, verifica storica
+    ├── presets.py          # valori consigliati per famiglia di asset
     ├── services.py         # casi d'uso senza Qt (caricamento, analisi, export)
     ├── live/               # watchlist, pianificazione controlli, scanner, storico segnali
     ├── settings.py         # preferenze (tema) in ~/.pytrader/settings.json
