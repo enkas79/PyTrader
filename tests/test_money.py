@@ -94,3 +94,16 @@ def test_coerenza_con_backtest_reale(random_walk) -> None:
     # senza compounding e senza limite di leva, P&L = R × 100
     assert isinstance(bundle.backtest, BacktestResult)
     assert res.net_profit == pytest.approx(bundle.backtest.total_r * 100)
+
+
+def test_leva_usata_e_necessaria() -> None:
+    # entry 100, stop 99 → rischio unitario 1; rischio 1 % di 10.000 = 100 → 100 unità = 1×
+    trade = _trade(TradeOutcome.WIN, 2.0, sl=99.0)
+    free = simulate_money([trade], MoneyParams(10_000, 1.0, 5.0))
+    assert free.capped_count == 0
+    assert free.max_leverage_used == pytest.approx(1.0)
+    assert free.required_leverage == pytest.approx(1.0)
+    capped = simulate_money([trade], MoneyParams(10_000, 2.0, 1.0))  # servirebbero 2×
+    assert capped.capped_count == 1
+    assert capped.max_leverage_used == pytest.approx(1.0)
+    assert capped.required_leverage == pytest.approx(2.0)
